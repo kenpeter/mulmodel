@@ -4,6 +4,12 @@ from core.problem import Problem
 from system.pipeline import RTTrainerPipeline
 
 
+@pytest.fixture
+def pipeline():
+    """Fresh pipeline with no disk loading for tests."""
+    return RTTrainerPipeline(load_on_start=False)
+
+
 def _seq_problem(values: list[float], n_support: int = 3) -> Problem:
     raw = np.zeros(64, dtype=np.float32)
     v = np.array(values, dtype=np.float32)
@@ -31,8 +37,7 @@ def _pattern_problem(bits: list[int]) -> Problem:
     return Problem(raw_input=raw, support_X=sx, support_y=sy, description="pattern_matching")
 
 
-def test_new_problem_trains_model():
-    pipeline = RTTrainerPipeline()
+def test_new_problem_trains_model(pipeline):
     p = _seq_problem([0, 1, 2, 3, 4, 5])
     a = pipeline.solve(p)
     assert a.was_trained is True
@@ -40,28 +45,20 @@ def test_new_problem_trains_model():
     assert a.value is not None
 
 
-def test_bank_grows_after_training():
-    pipeline = RTTrainerPipeline()
+def test_bank_grows_after_training(pipeline):
     assert pipeline.bank_size() == 0
     pipeline.solve(_seq_problem([0, 1, 2, 3, 4, 5]))
     assert pipeline.bank_size() == 1
 
 
-def test_same_domain_can_reuse(monkeypatch):
-    """
-    After training on sequence domain, a very similar sequence problem
-    should ideally reuse the bank. We test at minimum that source changes.
-    """
-    pipeline = RTTrainerPipeline()
+def test_same_domain_can_reuse(pipeline, monkeypatch):
     a1 = pipeline.solve(_seq_problem([0, 1, 2, 3, 4, 5]))
     assert a1.was_trained is True
 
-    # Force router to recognize bank model by mocking loss below threshold
     from router import router as router_mod
-    original_evaluate = router_mod.Router.evaluate
 
     def mock_evaluate(self, model, problem):
-        return 0.01  # below SOLVE_THRESHOLD
+        return 0.01
 
     monkeypatch.setattr(router_mod.Router, "evaluate", mock_evaluate)
 
@@ -70,16 +67,13 @@ def test_same_domain_can_reuse(monkeypatch):
     assert a2.source.startswith("bank:")
 
 
-def test_different_domain_trains_new_model():
-    pipeline = RTTrainerPipeline()
+def test_different_domain_trains_new_model(pipeline):
     pipeline.solve(_seq_problem([0, 1, 2, 3, 4, 5]))
     a = pipeline.solve(_pattern_problem([1, 0, 1, 0]))
-    # Pattern problem is new domain; likely needs training
     assert a.value is not None
 
 
-def test_answer_fields():
-    pipeline = RTTrainerPipeline()
+def test_answer_fields(pipeline):
     a = pipeline.solve(_seq_problem([1, 3, 5, 7, 9, 11]))
     assert hasattr(a, "value")
     assert hasattr(a, "confidence")
