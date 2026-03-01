@@ -2,11 +2,11 @@
 Download training data for BigModel pretraining.
 
 Downloads:
-  1. OpenWebText 13% (~5GB)  → data/openwebtext
-  2. DeepMind Math (~2GB)    → data/deepmind_math/<module>/
+  1. Wikitext-103 (~520MB)  → data/wikitext        (clean Wikipedia text)
+  2. GSM8K        (~8MB)    → data/math/gsm8k       (grade school math problems)
+  3. MATH dataset (~90MB)   → data/math/competition  (competition math problems)
 
-Resumable: re-running skips already-downloaded shards (HuggingFace cache).
-For true mid-file resume, use: huggingface-cli download (see bottom of script).
+Resumable: re-running skips already-downloaded datasets.
 
 Usage:
   python download_data.py             # download both
@@ -22,26 +22,18 @@ import time
 
 # ── config ────────────────────────────────────────────────────────────────────
 
-TEXT_DATASET   = "openwebtext"
-TEXT_SPLIT     = "train[:13%]"          # ~5GB
-TEXT_SAVE_DIR  = "data/openwebtext"
+TEXT_DATASET   = "wikitext"
+TEXT_CONFIG    = "wikitext-103-v1"      # 500MB, no auth needed, clean Wikipedia text
+TEXT_SPLIT     = "train"
+TEXT_SAVE_DIR  = "data/wikitext"
 
-# DeepMind math modules that match what this system does:
-#   sequences, arithmetic, algebra — not calculus/probability (too advanced)
-MATH_MODULES = [
-    "arithmetic__add_or_sub",
-    "arithmetic__add_or_sub_multiple",
-    "arithmetic__mul",
-    "arithmetic__div",
-    "arithmetic__mixed",
-    "algebra__linear_1d",
-    "algebra__linear_2d",
-    "numbers__place_value",
-    "numbers__list_prime_factors",
-    "numbers__gcd",
-    "numbers__lcm",
+# Math datasets (both work without loading scripts)
+MATH_SAVE_DIR  = "data/math"
+MATH_SOURCES = [
+    # (dataset_id, config, split, save_subdir, label)
+    ("openai/gsm8k",               "main", "train", "gsm8k",       "GSM8K ~8MB  grade school math"),
+    ("hendrycks/competition_math", None,   "train", "competition",  "MATH  ~90MB competition math"),
 ]
-MATH_SAVE_DIR  = "data/deepmind_math"
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -89,7 +81,7 @@ def download_text() -> None:
     print("  (HuggingFace cache: re-run resumes automatically)")
     t0 = time.time()
 
-    ds = load_dataset(TEXT_DATASET, split=TEXT_SPLIT)
+    ds = load_dataset(TEXT_DATASET, TEXT_CONFIG, split=TEXT_SPLIT)
 
     print(f"  Downloaded {len(ds):,} articles in {time.time()-t0:.0f}s")
     print(f"  Saving to {TEXT_SAVE_DIR} ...")
@@ -105,32 +97,26 @@ def download_text() -> None:
 
 def download_math() -> None:
     print("\n" + "=" * 60)
-    print("MATH: DeepMind Mathematics Dataset  (~2GB total)")
+    print("MATH: GSM8K + Competition MATH  (~100MB total)")
     print("=" * 60)
 
     from datasets import load_dataset
 
-    total_examples = 0
-    for module in MATH_MODULES:
-        save_dir = os.path.join(MATH_SAVE_DIR, module)
+    for dataset_id, config, split, subdir, label in MATH_SOURCES:
+        save_dir = os.path.join(MATH_SAVE_DIR, subdir)
 
         if _already_saved(save_dir):
-            print(f"  [skip]  {module:<45}  already saved")
+            print(f"  [skip]  {label}  already saved")
             continue
 
-        print(f"  [down]  {module:<45}  downloading...")
+        print(f"  [down]  {label}  downloading...")
         t0 = time.time()
-
         try:
-            ds = load_dataset(
-                "deepmind/math_dataset",
-                module,
-                split="train",
-            )
+            ds = load_dataset(dataset_id, config, split=split) if config \
+                 else load_dataset(dataset_id, split=split)
             os.makedirs(save_dir, exist_ok=True)
             ds.save_to_disk(save_dir)
-            total_examples += len(ds)
-            print(f"          {len(ds):>8,} examples  {time.time()-t0:.0f}s")
+            print(f"          {len(ds):>8,} examples  {time.time()-t0:.0f}s  ✓")
         except Exception as e:
             print(f"          ERROR: {e} — skipping")
 
@@ -145,7 +131,7 @@ def summary() -> None:
     print("Summary")
     print("=" * 60)
 
-    for label, path in [("OpenWebText", TEXT_SAVE_DIR), ("DeepMind Math", MATH_SAVE_DIR)]:
+    for label, path in [("Wikitext-103", TEXT_SAVE_DIR), ("Math (GSM8K+MATH)", MATH_SAVE_DIR)]:
         if os.path.exists(path):
             size = _dir_size(path)
             status = "ready" if _already_saved(path) or os.path.isdir(path) else "incomplete"

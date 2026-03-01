@@ -1,153 +1,108 @@
 """
-Demo: Real-Time Tiny Model Trainer — Domain-Aware Routing
+Demo: Competition Math — LoRA Test-Time Training
 
-Shows domain-aware routing: text problems → text specialist (small MLP),
-math problems → math specialist (micro MLP).  Each domain only matches
-models trained on the same type of data.
+Demonstrates test-time LoRA training for competition math:
+  - Unseen template type → SPAWN a new LoRA patch (100 gradient steps, ~5s)
+  - Same template again  → ROUTE to existing patch (instant, cosine similarity)
+
+Templates demonstrated:
+  1. ModularArithmetic  — "Find x where x^k ≡ c (mod p)"
+  2. LinearEquation     — "Solve ax + b = c for integer x"
+  3. GeometricSeries    — "Sum of first n terms, ratio r"
+  4. Modular again      → expects ROUTE
+  5. Linear again       → expects ROUTE
 
 Usage:
     python main.py
 """
 from __future__ import annotations
-import numpy as np
-from core.problem import Problem
-from system.pipeline import RTTrainerPipeline
-from data_generators.pattern_inferrer import PatternInferrer
+
+import torch
+from system.lora_pipeline import LoRAPipeline
 
 
-def make_problem(
-    support_pairs: list[tuple[list[float], float]],
-    query: list[float],
-    description: str,
-) -> Problem:
-    """
-    Build a problem from human-readable support pairs.
-
-    support_pairs: [([x0, x1, ...], y), ...]
-    query: the input we want to predict for
-    """
-    sx = np.array([p[0] for p in support_pairs], dtype=np.float32)
-    sy = np.array([[p[1]] for p in support_pairs], dtype=np.float32)
-
-    raw = np.zeros(64, dtype=np.float32)
-    q = np.array(query, dtype=np.float32)
-    raw[: len(q)] = q
-
-    return Problem(raw_input=raw, support_X=sx, support_y=sy, description=description)
-
-
-def show_inferred_rule(support_pairs):
-    """Show what rule the PatternInferrer finds before training."""
-    sx = np.array([p[0] for p in support_pairs], dtype=np.float32)
-    sy = np.array([[p[1]] for p in support_pairs], dtype=np.float32)
-    rule = PatternInferrer().infer(sx, sy)
-    print(f"  Inferred rule : {rule}")
-
-
-def make_text_problem(
-    support_pairs: list[tuple[str, float]],
-    query_text: str,
-    description: str,
-) -> Problem:
-    """Build a text/sentiment problem."""
-    support_texts  = [p[0] for p in support_pairs]
-    support_labels = [p[1] for p in support_pairs]
-    return Problem(
-        raw_text=query_text,
-        support_texts=support_texts,
-        support_labels=support_labels,
-        description=description,
-    )
-
-
-def demo(pipeline, problem, label):
-    import time
-    domain = "TEXT" if problem.is_text else "MATH"
+def demo(pipe: LoRAPipeline, problem_text: str, label: str) -> None:
     print(f"\n{'─'*64}")
-    print(f"[{domain}] {label}")
-    if not problem.is_text:
-        show_inferred_rule(problem.metadata.get("pairs", []))
-    t0 = time.time()
-    a = pipeline.solve(problem)
-    dt = time.time() - t0
-    print(f"  Answer        : {a.value[0]:.4f}")
-    print(f"  Source        : {a.source}")
-    print(f"  was_trained   : {a.was_trained}   loss={a.loss:.4f}   time={dt:.2f}s")
-    print(f"  Bank size now : {pipeline.bank_size()}")
-    return a
+    print(f"[PROBLEM] {label}")
+    print(f"  Text: {problem_text}")
+
+    answer, meta = pipe.solve(problem_text)
+    action = meta["action"].upper()
+
+    print(f"  Predicted answer : {answer:.2f}")
+    print(f"  Action           : {action}  (patch={meta['patch_id']})")
+    if action == "SPAWN":
+        print(f"  Template trained : {meta['template']}   loss={meta['train_loss']:.4f}")
+    else:
+        print(f"  Cosine similarity: {meta['similarity']:.4f}")
+    print(f"  Time             : {meta['elapsed']:.2f}s   Bank size: {pipe.bank_size()}")
 
 
-def main():
-    pipeline = RTTrainerPipeline()
-    print("=" * 64)
-    print("Real-Time Tiny Model Trainer — Domain-Aware Routing Demo")
-    print("TEXT → small MLP specialist   MATH → micro MLP specialist")
-    print("Each domain only routes to models of the same type.")
-    print("=" * 64)
+def main() -> None:
+    device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    # ── Text Problem 1: Sentiment (train a TEXT specialist) ───────────────────
-    sentiment_support = [
-        ("great product loved it",           1.0),
-        ("excellent service very happy",      1.0),
-        ("terrible quality broke instantly", -1.0),
-        ("awful experience never again",     -1.0),
-        ("amazing quality highly recommend",  1.0),
-        ("horrible waste of money",          -1.0),
-    ]
-    pt1 = make_text_problem(
-        sentiment_support,
-        "wonderful movie loved every scene",
-        "sentiment",
+    # GPU: full training (100 steps, 60 examples).
+    # CPU: lighter training (20 steps, 10 examples) to keep demo practical.
+    if device == "cuda":
+        n_steps, n_similar = 100, 60
+    else:
+        n_steps, n_similar = 20, 10
+
+    pipe = LoRAPipeline(
+        device=device,
+        n_train_steps=n_steps,
+        n_similar=n_similar,
     )
-    a_t1 = demo(pipeline, pt1, "Sentiment: 'wonderful movie...' → positive?")
 
-    # ── Text Problem 2: Same domain → should REUSE text specialist ────────────
-    pt2 = make_text_problem(
-        sentiment_support,
-        "worst product ever total disaster",
-        "sentiment",
+    print("=" * 64)
+    print("Competition Math — LoRA Test-Time Training Demo")
+    print(f"Device: {device}   train_steps={n_steps}   n_similar={n_similar}")
+    print("SPAWN = new LoRA patch trained from scratch")
+    print("ROUTE = existing patch reused   (instant, cosine sim)")
+    print("=" * 64)
+
+    # ── Problem 1: Modular arithmetic (bank is empty → SPAWN) ────────────────
+    demo(
+        pipe,
+        "Find the smallest non-negative integer x "
+        "where x^2 is congruent to 3 modulo 7.",
+        "#1 Modular arithmetic  (expects SPAWN)",
     )
-    a_t2 = demo(pipeline, pt2, "Sentiment: 'worst product...' → negative? (expects REUSE)")
 
-    # ── Math Problem 1: Linear +3 sequence ────────────────────────────────────
-    pairs_1 = [([0.0, 3.0], 6.0), ([3.0, 6.0], 9.0), ([6.0, 9.0], 12.0)]
-    p1 = make_problem(pairs_1, [9.0, 12.0], "linear+3 sequence")
-    p1.metadata["pairs"] = pairs_1
-    p1.support_X /= 15.0
-    p1.support_y /= 15.0
-    a1 = demo(pipeline, p1, "Linear +3 sequence  [0,3,6,9,...] → predict next")
+    # ── Problem 2: Linear equation (different template → SPAWN) ──────────────
+    demo(
+        pipe,
+        "Solve for the integer x: 3x + 5 = 20.",
+        "#2 Linear equation  (expects SPAWN)",
+    )
 
-    # ── Math Problem 2: Same linear+3 → should REUSE math specialist ──────────
-    pairs_2 = [([2.0, 5.0], 8.0), ([5.0, 8.0], 11.0), ([8.0, 11.0], 14.0)]
-    p2 = make_problem(pairs_2, [11.0, 14.0], "linear+3 offset start")
-    p2.metadata["pairs"] = pairs_2
-    p2.support_X /= 15.0
-    p2.support_y /= 15.0
-    a2 = demo(pipeline, p2, "Linear +3 (diff start) → expects bank HIT (MATH only)")
+    # ── Problem 3: Geometric series (different template → SPAWN) ─────────────
+    demo(
+        pipe,
+        "Find the sum of the first 5 terms of a geometric sequence "
+        "with first term 2 and common ratio 3.",
+        "#3 Geometric series  (expects SPAWN)",
+    )
 
-    # ── Math Problem 3: Geometric ×3 ──────────────────────────────────────────
-    pairs_3 = [([1.0, 3.0], 9.0), ([3.0, 9.0], 27.0), ([9.0, 27.0], 81.0)]
-    p3 = make_problem(pairs_3, [27.0, 81.0], "geometric×3")
-    p3.metadata["pairs"] = pairs_3
-    p3.support_X /= 100.0
-    p3.support_y /= 100.0
-    a3 = demo(pipeline, p3, "Geometric ×3  [1,3,9,27,...] → predict next")
+    # ── Problem 4: Modular arithmetic again (same template → ROUTE) ──────────
+    demo(
+        pipe,
+        "Find the smallest non-negative integer x "
+        "where x^3 is congruent to 2 modulo 11.",
+        "#4 Modular arithmetic again  (expects ROUTE)",
+    )
+
+    # ── Problem 5: Linear equation again (same template → ROUTE) ─────────────
+    demo(
+        pipe,
+        "Solve for the integer x: 7x + 3 = 38.",
+        "#5 Linear equation again  (expects ROUTE)",
+    )
 
     # ── Summary ───────────────────────────────────────────────────────────────
     print(f"\n{'='*64}")
     print("Summary:")
-    results = [
-        ("Sentiment (new TEXT specialist)",   a_t1, "text"),
-        ("Sentiment (reuse TEXT specialist)", a_t2, "text"),
-        ("Linear +3 (new MATH specialist)",   a1,   "math"),
-        ("Linear +3 (reuse MATH specialist)", a2,   "math"),
-        ("Geometric ×3 (new MATH specialist)",a3,   "math"),
-    ]
-    for label, a, dom in results:
-        tag = "TRAINED" if a.was_trained else "REUSED "
-        print(f"  {tag}  [{dom.upper()}]  {label:<38} loss={a.loss:.4f}")
-    print(f"\n  Final bank size: {pipeline.bank_size()} models")
-    pipeline.status()
+    pipe.status()
     print("=" * 64)
 
 
