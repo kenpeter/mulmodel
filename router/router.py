@@ -51,8 +51,8 @@ class Router:
     SOLVE_THRESHOLD: float = MATH_SOLVE_THRESHOLD
     FINETUNE_THRESHOLD: float = MATH_FINETUNE_THRESHOLD
 
-    def __init__(self, model_index: ModelIndex) -> None:
-        self.encoder = ProblemEncoder()
+    def __init__(self, model_index: ModelIndex, encoder=None) -> None:
+        self.encoder = encoder if encoder is not None else ProblemEncoder()
         self.model_index = model_index
         self._model_store: dict[str, TinyModel] = {}
         self._domains: dict[str, str] = {}  # "text" or "math" per model

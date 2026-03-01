@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Model weights & bank (runtime artifacts — never commit)
+bank_data/
+big_model_data/
+*.pt
+*.pth
+*.npy
+
+# Training & downloaded datasets (too large for git)
+data/
+*.parquet
+*.arrow
+*.json.gz
+
+# HuggingFace cache
+.cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+*.env
+venv/
+.venv/

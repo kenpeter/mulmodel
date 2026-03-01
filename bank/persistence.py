@@ -75,11 +75,12 @@ class BankPersistence:
 
     # ── save ─────────────────────────────────────────────────────────────────
 
-    def save(self, bank: ModelBank) -> None:
+    def save(self, bank: ModelBank, embedding_dim: int = 64) -> None:
         os.makedirs(self.bank_dir, exist_ok=True)
 
         index: dict = {
             "counter": bank._counter,
+            "embedding_dim": embedding_dim,
             "models": {},
         }
 
@@ -124,10 +125,11 @@ class BankPersistence:
 
     # ── load ─────────────────────────────────────────────────────────────────
 
-    def load(self, bank: ModelBank) -> bool:
+    def load(self, bank: ModelBank, embedding_dim: int = 64) -> bool:
         """
         Load saved models into bank.
         Returns True if anything was loaded, False if no saved bank exists.
+        If embedding_dim mismatches the stored dim, clears and starts fresh.
         """
         index_path = os.path.join(self.bank_dir, "index.json")
         if not os.path.exists(index_path):
@@ -135,6 +137,14 @@ class BankPersistence:
 
         with open(index_path) as f:
             index = json.load(f)
+
+        stored_dim = index.get("embedding_dim", 64)
+        if stored_dim != embedding_dim:
+            print(
+                f"  [Bank] Embedding dim mismatch: stored={stored_dim} "
+                f"current={embedding_dim}. Starting fresh."
+            )
+            return False
 
         bank._counter = index.get("counter", 0)
 

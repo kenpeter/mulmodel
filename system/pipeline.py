@@ -8,7 +8,7 @@ from bank.model_bank import ModelBank
 from bank.persistence import BankPersistence
 from router.router import Router
 from router.model_index import ModelIndex
-from router.encoder import compute_specialty_embedding
+from router.encoder import ProblemEncoder
 from data_generators.selector import GeneratorSelector
 from curriculum.trainer import CurriculumTrainer
 from consolidation.consolidator import Consolidator
@@ -41,16 +41,33 @@ class RTTrainerPipeline:
         self,
         bank_dir: str | None = None,
         load_on_start: bool = True,
+        encoder=None,
     ) -> None:
         self.bank         = ModelBank()
         self.model_index  = ModelIndex()
-        self.router       = Router(self.model_index)
+        self.encoder      = encoder if encoder is not None else self._load_encoder()
+        self.router       = Router(self.model_index, encoder=self.encoder)
         self.consolidator = Consolidator()
         self.persistence  = BankPersistence(bank_dir) if bank_dir else BankPersistence()
         self._problem_count = 0
 
         if load_on_start:
             self._boot()
+
+    def _emb_dim(self) -> int:
+        return getattr(self.encoder, "EMB_DIM", 64)
+
+    @staticmethod
+    def _load_encoder():
+        try:
+            from big_model.encoder import BigModelEncoder
+            enc = BigModelEncoder.from_checkpoint()
+            if enc is not None:
+                print("  [Pipeline] Using BigModel encoder (256-dim)")
+                return enc
+        except ImportError:
+            pass
+        return ProblemEncoder()
 
     # ── startup ───────────────────────────────────────────────────────────────
 
@@ -60,7 +77,7 @@ class RTTrainerPipeline:
             print("  [Pipeline] No saved bank found. Starting fresh.")
             return
 
-        loaded = self.persistence.load(self.bank)
+        loaded = self.persistence.load(self.bank, embedding_dim=self._emb_dim())
         if loaded:
             # Re-register all loaded models into the router (with domain)
             for model_id in self.bank.all_model_ids():
@@ -132,7 +149,7 @@ class RTTrainerPipeline:
             model, feeling = trainer.train()
 
             sx_gen, sy_gen = generator.generate(level=2, n_samples=50)
-            specialty_emb  = compute_specialty_embedding(sx_gen, sy_gen)
+            specialty_emb  = self.encoder.compute_specialty_embedding(sx_gen, sy_gen)
             new_id = self.bank.register(
                 model, specialty_emb, feeling,
                 generator_type=generator_type,
@@ -160,11 +177,11 @@ class RTTrainerPipeline:
 
     def _autosave(self) -> None:
         if self._problem_count % _AUTOSAVE_EVERY == 0:
-            self.persistence.save(self.bank)
+            self.persistence.save(self.bank, embedding_dim=self._emb_dim())
 
     def save(self) -> None:
         """Explicit save — call this on clean shutdown."""
-        self.persistence.save(self.bank)
+        self.persistence.save(self.bank, embedding_dim=self._emb_dim())
 
     # ── info ─────────────────────────────────────────────────────────────────
 
