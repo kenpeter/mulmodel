@@ -17,7 +17,6 @@ Usage:
 """
 from __future__ import annotations
 
-import torch
 from system.lora_pipeline import LoRAPipeline
 
 
@@ -39,24 +38,11 @@ def demo(pipe: LoRAPipeline, problem_text: str, label: str) -> None:
 
 
 def main() -> None:
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-
-    # GPU: full training (100 steps, 60 examples).
-    # CPU: lighter training (20 steps, 10 examples) to keep demo practical.
-    if device == "cuda":
-        n_steps, n_similar = 100, 60
-    else:
-        n_steps, n_similar = 20, 10
-
-    pipe = LoRAPipeline(
-        device=device,
-        n_train_steps=n_steps,
-        n_similar=n_similar,
-    )
+    pipe = LoRAPipeline()   # auto-selects cuda if available, else cpu
 
     print("=" * 64)
     print("Competition Math — LoRA Test-Time Training Demo")
-    print(f"Device: {device}   train_steps={n_steps}   n_similar={n_similar}")
+    print(f"Device: {pipe.device}   train_steps={pipe.n_train_steps}   n_similar={pipe.n_similar}")
     print("SPAWN = new LoRA patch trained from scratch")
     print("ROUTE = existing patch reused   (instant, cosine sim)")
     print("=" * 64)

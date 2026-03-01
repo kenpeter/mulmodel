@@ -43,15 +43,18 @@ class LoRAPipeline:
     def __init__(
         self,
         bank_dir: str | None = None,
-        device: str = "cpu",
+        device: str | None = None,
         load_on_start: bool = True,
-        n_train_steps: int = 100,
-        n_similar: int = 60,
+        n_train_steps: int | None = None,
+        n_similar: int | None = None,
     ) -> None:
-        self.bank_dir      = os.path.abspath(bank_dir or _DEFAULT_BANK_DIR)
-        self.device        = device
-        self.n_train_steps = n_train_steps
-        self.n_similar     = n_similar
+        self.bank_dir = os.path.abspath(bank_dir or _DEFAULT_BANK_DIR)
+        self.device   = device or ("cuda" if torch.cuda.is_available() else "cpu")
+
+        # GPU: full training; CPU: lighter training so the demo is practical
+        _on_gpu = self.device.startswith("cuda")
+        self.n_train_steps = n_train_steps if n_train_steps is not None else (100 if _on_gpu else 20)
+        self.n_similar     = n_similar     if n_similar     is not None else (60  if _on_gpu else 10)
 
         # BigModel backbone (frozen during LoRA training)
         self.big_model = self._load_big_model()
