@@ -43,58 +43,52 @@ MASK_PROB       = 0.15
 
 class WikipediaLoader:
     """
-    Streams Wikipedia articles via HuggingFace datasets.
-    No full download — fetches one shard at a time.
-    Falls back to diverse synthetic text if datasets not installed.
+    Loads Wikitext-103 from disk (data/wikitext/, downloaded by download_data.py).
+    Falls back to diverse synthetic text if the dataset is not present.
     """
 
     _buffer: list[str] = []
     _stream = None
+    _tried: bool = False
 
     @classmethod
     def _init_stream(cls) -> None:
+        wikitext_dir = os.path.join(
+            os.path.dirname(__file__), "..", "data", "wikitext"
+        )
         try:
-            from datasets import load_dataset
-            cls._stream = iter(
-                load_dataset(
-                    "wikipedia",
-                    "20220301.en",
-                    split="train",
-                    streaming=True,
-                    trust_remote_code=True,
-                )
-            )
-            print("  [WikipediaLoader] Streaming Wikipedia (en, 2022-03-01)")
+            from datasets import load_from_disk
+            ds = load_from_disk(os.path.abspath(wikitext_dir))
+            cls._stream = iter(ds)
+            print(f"  [WikipediaLoader] Loaded Wikitext-103 from {wikitext_dir}")
         except Exception as e:
-            print(f"  [WikipediaLoader] Wikipedia unavailable ({e})")
+            print(f"  [WikipediaLoader] Wikitext-103 unavailable ({e})")
             print("  [WikipediaLoader] Falling back to synthetic general text.")
+            print("  [WikipediaLoader] Run: python download_data.py --text")
             cls._stream = None
 
     @classmethod
     def next_chunk(cls) -> str:
-        """Return the next ~512-char chunk of general text."""
-        # Refill buffer if empty
+        """Return the next ~512-char chunk of text."""
         if not cls._buffer:
-            if cls._stream is None and not hasattr(cls, "_tried"):
+            if not cls._tried:
                 cls._tried = True
                 cls._init_stream()
 
             if cls._stream is not None:
                 try:
-                    article = next(cls._stream)
-                    text    = article.get("text", "")
-                    # Split article into MAX_SEQ-sized chunks
+                    row  = next(cls._stream)
+                    text = row.get("text", "")
                     for i in range(0, len(text), MAX_SEQ):
                         chunk = text[i : i + MAX_SEQ].strip()
                         if len(chunk) > 20:
                             cls._buffer.append(chunk)
                 except StopIteration:
-                    cls._stream = None  # exhausted, use fallback
+                    cls._stream = None  # exhausted; keep using fallback
 
         if cls._buffer:
             return cls._buffer.pop(0)
 
-        # Fallback: synthetic general-knowledge sentences
         return random.choice(_FALLBACK_TEXT)
 
 
@@ -183,7 +177,7 @@ class BigModelPretrainer:
             padded[:length] = arr
             seqs.append(padded)
 
-        values = torch.tensor(seqs, dtype=torch.float32, device=self.device)
+        values = torch.from_numpy(np.array(seqs, dtype=np.float32)).to(self.device)
         mask   = (torch.rand_like(values) < MASK_PROB) & (values != 0.0)
         for i in range(BATCH_SIZE):
             if not mask[i].any():
