@@ -63,9 +63,8 @@ class BigModel(nn.Module):
         # Numeric input: project each scalar float → D_MODEL
         self.numeric_proj = nn.Linear(1, D_MODEL)
 
-        # Pretraining heads
-        self.mask_head_numeric = nn.Linear(D_MODEL, 1)            # predict masked float
-        self.mask_head_text    = nn.Linear(D_MODEL, BYTE_VOCAB)   # predict masked byte
+        # Pretraining head
+        self.mask_head_text = nn.Linear(D_MODEL, BYTE_VOCAB)   # predict masked byte
 
     # ── internal helpers ──────────────────────────────────────────────────────
 
@@ -119,26 +118,6 @@ class BigModel(nn.Module):
         return self._mean_pool(hs, attention_mask.float())
 
     # ── pretraining forward passes ────────────────────────────────────────────
-
-    def pretrain_numeric(
-        self, values: torch.Tensor, mask: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """
-        Masked value modeling for numeric sequences.
-
-        values: (B, S) float32 — original values
-        mask:   (B, S) bool    — True = position is masked
-        returns preds (N, 1), targets (N, 1)  where N = number of masked tokens
-        """
-        embeds = self.numeric_proj(values.unsqueeze(-1))   # (B, S, D)
-        embeds = embeds.clone()
-        embeds[mask] = 0.0                                 # zero-out masked
-        attn   = torch.ones(values.shape[0], values.shape[1],
-                            dtype=torch.long, device=values.device)
-        hs      = self._run(inputs_embeds=embeds, attention_mask=attn)
-        preds   = self.mask_head_numeric(hs[mask])         # (N, 1)
-        targets = values[mask].unsqueeze(-1)               # (N, 1)
-        return preds, targets
 
     def pretrain_text(
         self, input_ids: torch.Tensor, mask: torch.Tensor

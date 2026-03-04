@@ -2,12 +2,11 @@
 Pretraining script for BigModel (256-wide, 128-layer transformer).
 
 Task: Masked Token Modeling (BERT-style)
-  Math text:   Wikipedia math/science articles + synthetic sequences → mask 15% → predict
-  General text: Wikipedia streaming (no full download) → mask 15% bytes → predict
+  Text → mask 15% bytes → predict masked bytes (cross-entropy)
 
 Data sources:
   1. Wikipedia (HuggingFace datasets, streaming) — general world knowledge
-  2. Synthetic math sequences                    — numeric pattern understanding
+  2. Competition math word problems (synthetic) — math problem understanding
 
 NOT used here: sentiment reviews, product reviews, or any task-specific data.
 Those belong to the tiny specialist models, not the general backbone.
@@ -24,13 +23,59 @@ from __future__ import annotations
 
 import os
 import random
-import numpy as np
 import torch
 import torch.nn as nn
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import LinearLR
 
 from big_model.transformer import BigModel, MAX_SEQ, BYTE_VOCAB
+from data_generators.competition_math import all_examples
+
+# ── Math dataset loader ────────────────────────────────────────────────────────
+
+def _load_math_pool() -> list[str]:
+    """
+    Load math problems from disk (NuminaMath-CoT, NuminaMath-1.5, Big-Math).
+    Falls back to synthetic competition math if datasets not downloaded.
+    Each entry is: "<problem> Answer: <answer>"
+    """
+    base = os.path.join(os.path.dirname(__file__), "..", "data", "math")
+    sources = [
+        # (subdir, problem_field, answer_field)
+        ("numinamath_cot", "problem", "solution"),
+        ("numinamath_15",  "problem", "answer"),
+        ("bigmath",        "problem", "answer"),
+    ]
+
+    pool: list[str] = []
+    try:
+        from datasets import load_from_disk
+        for subdir, prob_field, ans_field in sources:
+            path = os.path.abspath(os.path.join(base, subdir))
+            try:
+                ds = load_from_disk(path)
+                for row in ds:
+                    prob = row.get(prob_field, "").strip()
+                    ans  = row.get(ans_field,  "").strip()
+                    if prob and ans:
+                        pool.append(f"{prob} Answer: {ans}")
+                print(f"  [MathLoader] {subdir}: {len(ds):,} problems loaded")
+            except Exception as e:
+                print(f"  [MathLoader] {subdir} unavailable ({e}) — skipping")
+    except ImportError:
+        pass
+
+    if pool:
+        print(f"  [MathLoader] Total: {len(pool):,} math problems")
+        return pool
+
+    # fallback: synthetic problems
+    print("  [MathLoader] No math datasets found — using synthetic fallback")
+    print("  [MathLoader] Run: python download_data.py --math")
+    return [
+        f"{ex.text} Answer: {int(ex.answer)}"
+        for ex in all_examples(n_per_template=10_000)
+    ]
 
 CHECKPOINT_PATH = "big_model_data/big_model.pt"
 BATCH_SIZE      = 8
@@ -128,14 +173,15 @@ class BigModelPretrainer:
     """
     Pretrain BigModel via masked token modeling on:
       - Wikipedia text (general world knowledge)
-      - Synthetic math sequences (numeric pattern understanding)
+      - Competition math word problems (math language understanding)
     """
 
     def __init__(self, device: str | None = None) -> None:
-        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-        self.model  = BigModel().to(self.device)
-        self.optim  = AdamW(self.model.parameters(), lr=LR, weight_decay=0.01)
-        self._step  = 0
+        self.device    = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        self.model     = BigModel().to(self.device)
+        self.optim     = AdamW(self.model.parameters(), lr=LR, weight_decay=0.01)
+        self._step     = 0
+        self._math_pool: list[str] = _load_math_pool()
 
         n = self.model.param_count()
         print(f"  [BigModel] {n:,} params  device={self.device}")
@@ -143,111 +189,78 @@ class BigModelPretrainer:
             print("  [BigModel] WARNING: 128-layer model on CPU is very slow.")
             print("             Use your 4070 GPU — set CUDA_VISIBLE_DEVICES=0")
 
-    # ── math batch ────────────────────────────────────────────────────────────
-
-    def _gen_math_batch(self) -> tuple[torch.Tensor, torch.Tensor]:
-        """Synthetic numeric sequences: linear, geometric, quadratic, fibonacci."""
-        seqs = []
-        for _ in range(BATCH_SIZE):
-            length = random.randint(8, MAX_SEQ)
-            kind   = random.choice(["linear", "geometric", "quadratic", "fibonacci"])
-            start  = random.uniform(-5.0, 5.0)
-            step   = random.uniform(0.5, 3.0)
-
-            if kind == "linear":
-                seq = [start + i * step for i in range(length)]
-            elif kind == "geometric":
-                ratio = random.uniform(1.1, 2.0)
-                seq   = [start * (ratio ** i) for i in range(length)]
-            elif kind == "quadratic":
-                seq   = [start + i * step + 0.1 * i * i for i in range(length)]
-            else:  # fibonacci-like recurrence
-                a, b = start, start + step
-                seq  = [a, b]
-                for _ in range(length - 2):
-                    a, b = b, a + b
-                    seq.append(b)
-                seq = seq[:length]
-
-            arr = np.array(seq, dtype=np.float32)
-            mx  = max(float(np.abs(arr).max()), 1e-6)
-            arr = np.clip(arr / mx, -1.0, 1.0)
-
-            padded          = np.zeros(MAX_SEQ, dtype=np.float32)
-            padded[:length] = arr
-            seqs.append(padded)
-
-        values = torch.from_numpy(np.array(seqs, dtype=np.float32)).to(self.device)
-        mask   = (torch.rand_like(values) < MASK_PROB) & (values != 0.0)
-        for i in range(BATCH_SIZE):
-            if not mask[i].any():
-                mask[i, random.randint(0, MAX_SEQ - 1)] = True
-        return values, mask
-
-    # ── Wikipedia text batch ──────────────────────────────────────────────────
-
-    def _gen_text_batch(self) -> tuple[torch.Tensor, torch.Tensor]:
-        """Wikipedia articles (or fallback synthetic knowledge text), byte-encoded."""
+    def _encode_texts(self, texts: list[str]) -> tuple[torch.Tensor, torch.Tensor]:
+        """Byte-encode a list of strings → (input_ids, mask) tensors."""
         ids_list = []
-        for _ in range(BATCH_SIZE):
-            text   = WikipediaLoader.next_chunk()
+        for text in texts:
             b      = list(text.encode("utf-8", errors="replace"))[:MAX_SEQ]
             padded = b + [0] * (MAX_SEQ - len(b))
             ids_list.append(padded)
 
         input_ids = torch.tensor(ids_list, dtype=torch.long, device=self.device)
-        mask      = (torch.rand(BATCH_SIZE, MAX_SEQ, device=self.device) < MASK_PROB) \
+        mask      = (torch.rand(len(texts), MAX_SEQ, device=self.device) < MASK_PROB) \
                     & (input_ids != 0)
-        for i in range(BATCH_SIZE):
+        for i in range(len(texts)):
             if not mask[i].any():
                 mask[i, random.randint(0, MAX_SEQ - 1)] = True
         return input_ids, mask
 
+    # ── Wikipedia text batch ──────────────────────────────────────────────────
+
+    def _gen_text_batch(self) -> tuple[torch.Tensor, torch.Tensor]:
+        """Wikipedia articles (or fallback synthetic knowledge text), byte-encoded."""
+        texts = [WikipediaLoader.next_chunk() for _ in range(BATCH_SIZE)]
+        return self._encode_texts(texts)
+
+    # ── Competition math batch ─────────────────────────────────────────────────
+
+    def _gen_math_batch(self) -> tuple[torch.Tensor, torch.Tensor]:
+        """Competition math word problems as text, byte-encoded."""
+        texts = random.choices(self._math_pool, k=BATCH_SIZE)
+        return self._encode_texts(texts)
+
     # ── training ──────────────────────────────────────────────────────────────
 
-    def _step_math(self) -> torch.Tensor:
-        values, mask   = self._gen_math_batch()
-        preds, targets = self.model.pretrain_numeric(values, mask)
-        return nn.functional.mse_loss(preds, targets)
-
-    def _step_text(self) -> torch.Tensor:
-        input_ids, mask  = self._gen_text_batch()
-        logits, targets  = self.model.pretrain_text(input_ids, mask)
+    def _step_text(self, input_ids: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        logits, targets = self.model.pretrain_text(input_ids, mask)
         return nn.functional.cross_entropy(logits, targets)
 
     def train(self, n_epochs: int = 10, steps_per_epoch: int = 50) -> BigModel:
         """
         Pretrain for n_epochs × steps_per_epoch gradient steps.
+        Each step trains on one Wikipedia batch + one math problem batch.
         Checkpoint saved after every epoch.
         """
         scheduler = LinearLR(
             self.optim, start_factor=0.1, end_factor=1.0, total_iters=WARMUP_STEPS
         )
         print(f"  [BigModel] Pretraining: {n_epochs} epochs × {steps_per_epoch} steps")
-        print(f"  [BigModel] Data: Wikipedia (general) + synthetic math sequences")
+        print(f"  [BigModel] Data: Wikipedia text + competition math problems")
 
         for epoch in range(1, n_epochs + 1):
             self.model.train()
+            epoch_wiki = 0.0
             epoch_math = 0.0
-            epoch_text = 0.0
 
             for _ in range(steps_per_epoch):
                 self.optim.zero_grad()
-                math_loss  = self._step_math()
-                text_loss  = self._step_text()
-                (math_loss + text_loss).backward()
+                wiki_ids, wiki_mask = self._gen_text_batch()
+                math_ids, math_mask = self._gen_math_batch()
+                wiki_loss = self._step_text(wiki_ids, wiki_mask)
+                math_loss = self._step_text(math_ids, math_mask)
+                (wiki_loss + math_loss).backward()
                 nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
                 self.optim.step()
                 if self._step < WARMUP_STEPS:
                     scheduler.step()
                 self._step  += 1
+                epoch_wiki  += wiki_loss.item()
                 epoch_math  += math_loss.item()
-                epoch_text  += text_loss.item()
 
             print(
                 f"  Epoch {epoch:3d}/{n_epochs}  "
-                f"math_loss={epoch_math/steps_per_epoch:.4f}  "
-                f"text_loss={epoch_text/steps_per_epoch:.4f}"
+                f"wiki_loss={epoch_wiki/steps_per_epoch:.4f}  "
+                f"math_loss={epoch_math/steps_per_epoch:.4f}"
             )
             self.model.save(CHECKPOINT_PATH)
 
