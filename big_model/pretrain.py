@@ -7,7 +7,6 @@ Task: Masked Token Modeling (BERT-style)
 Data sources:
   1. deepmind/code_contests  — competitive programming problems + solutions
   2. open-r1/codeforces-cots — Codeforces problems + chain-of-thought solutions
-  3. Competition math word problems (synthetic fallback)
 
 NOT used here: sentiment reviews, product reviews, or any task-specific data.
 Those belong to the tiny specialist models, not the general backbone.
@@ -31,53 +30,6 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import LinearLR
 
 from big_model.transformer import BigModel, MAX_SEQ, BYTE_VOCAB
-from data_generators.competition_math import all_examples
-
-# ── Math dataset loader ────────────────────────────────────────────────────────
-
-def _load_math_pool() -> list[str]:
-    """
-    Load math problems from disk (NuminaMath-CoT, NuminaMath-1.5, Big-Math).
-    Falls back to synthetic competition math if datasets not downloaded.
-    Each entry is: "<problem> Answer: <answer>"
-    """
-    base = os.path.join(os.path.dirname(__file__), "..", "data", "math")
-    sources = [
-        # (subdir, problem_field, answer_field)
-        ("numinamath_cot", "problem", "solution"),
-        ("numinamath_15",  "problem", "answer"),
-        ("bigmath",        "problem", "answer"),
-    ]
-
-    pool: list[str] = []
-    try:
-        from datasets import load_from_disk
-        for subdir, prob_field, ans_field in sources:
-            path = os.path.abspath(os.path.join(base, subdir))
-            try:
-                ds = load_from_disk(path)
-                for row in ds:
-                    prob = row.get(prob_field, "").strip()
-                    ans  = row.get(ans_field,  "").strip()
-                    if prob and ans:
-                        pool.append(f"{prob} Answer: {ans}")
-                print(f"  [MathLoader] {subdir}: {len(ds):,} problems loaded")
-            except Exception as e:
-                print(f"  [MathLoader] {subdir} unavailable ({e}) — skipping")
-    except ImportError:
-        pass
-
-    if pool:
-        print(f"  [MathLoader] Total: {len(pool):,} math problems")
-        return pool
-
-    # fallback: synthetic problems
-    print("  [MathLoader] No math datasets found — using synthetic fallback")
-    print("  [MathLoader] Run: python download_data.py --math")
-    return [
-        f"{ex.text} Answer: {int(ex.answer)}"
-        for ex in all_examples(n_per_template=10_000)
-    ]
 
 CHECKPOINT_PATH = "big_model_data/big_model_latest.pt"
 BEST_PATH       = "big_model_data/big_model_best.pt"
@@ -174,7 +126,6 @@ class BigModelPretrainer:
     """
     Pretrain BigModel via masked token modeling on:
       - Coding problems + solutions (deepmind/code_contests, open-r1/codeforces-cots)
-      - Competition math word problems (math language understanding)
     """
 
     def __init__(self, device: str | None = None, resume: bool = True) -> None:
@@ -183,7 +134,6 @@ class BigModelPretrainer:
         self.optim     = AdamW(self.model.parameters(), lr=LR, weight_decay=0.01)
         self._step     = 0
         self._start_epoch = 1
-        self._math_pool: list[str] = _load_math_pool()
 
         self._best_loss = float("inf")
 
@@ -231,13 +181,6 @@ class BigModelPretrainer:
         texts = [CodingLoader.next_chunk() for _ in range(BATCH_SIZE)]
         return self._encode_texts(texts)
 
-    # ── Competition math batch ─────────────────────────────────────────────────
-
-    def _gen_math_batch(self) -> tuple[torch.Tensor, torch.Tensor]:
-        """Competition math word problems as text, byte-encoded."""
-        texts = random.choices(self._math_pool, k=BATCH_SIZE)
-        return self._encode_texts(texts)
-
     # ── training ──────────────────────────────────────────────────────────────
 
     def _step_text(self, input_ids: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
@@ -247,43 +190,38 @@ class BigModelPretrainer:
     def train(self, n_epochs: int = 10, steps_per_epoch: int = 50) -> BigModel:
         """
         Pretrain for n_epochs × steps_per_epoch gradient steps.
-        Each step trains on one Wikipedia batch + one math problem batch.
+        Each step trains on one coding batch.
         Checkpoint saved after every epoch.
         """
         scheduler = LinearLR(
             self.optim, start_factor=0.1, end_factor=1.0, total_iters=WARMUP_STEPS
         )
         print(f"  [BigModel] Pretraining: epochs {self._start_epoch}–{n_epochs} × {steps_per_epoch} steps")
-        print(f"  [BigModel] Data: coding problems (code_contests + codeforces-cots) + math")
+        print(f"  [BigModel] Data: coding problems (code_contests + codeforces-cots)")
 
         for epoch in range(self._start_epoch, n_epochs + 1):
             self.model.train()
-            epoch_code = 0.0
-            epoch_math = 0.0
+            epoch_loss = 0.0
 
             for _ in range(steps_per_epoch):
                 self.optim.zero_grad()
                 code_ids, code_mask = self._gen_text_batch()
-                math_ids, math_mask = self._gen_math_batch()
-                code_loss = self._step_text(code_ids, code_mask)
-                math_loss = self._step_text(math_ids, math_mask)
-                (code_loss + math_loss).backward()
+                loss = self._step_text(code_ids, code_mask)
+                loss.backward()
                 nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
                 self.optim.step()
                 if self._step < WARMUP_STEPS:
                     scheduler.step()
-                self._step  += 1
-                epoch_code  += code_loss.item()
-                epoch_math  += math_loss.item()
+                self._step   += 1
+                epoch_loss   += loss.item()
 
-            total_loss = (epoch_code + epoch_math) / steps_per_epoch
+            total_loss = epoch_loss / steps_per_epoch
             improved   = total_loss < self._best_loss
             if improved:
                 self._best_loss = total_loss
             print(
                 f"  Epoch {epoch:3d}/{n_epochs}  "
-                f"code_loss={epoch_code/steps_per_epoch:.4f}  "
-                f"math_loss={epoch_math/steps_per_epoch:.4f}"
+                f"code_loss={total_loss:.4f}"
                 + ("  [best]" if improved else "")
             )
             os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)
