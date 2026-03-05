@@ -187,10 +187,11 @@ class BigModelPretrainer:
         scheduler = LinearLR(
             self.optim, start_factor=0.1, end_factor=1.0, total_iters=WARMUP_STEPS
         )
-        print(f"  [BigModel] Pretraining: epochs {self._start_epoch}–{n_epochs} × {steps_per_epoch} steps")
+        end_epoch = self._start_epoch + n_epochs - 1
+        print(f"  [BigModel] Pretraining: epochs {self._start_epoch}–{end_epoch} × {steps_per_epoch} steps")
         print(f"  [BigModel] Data: coding problems (code_contests + codeforces-cots)")
 
-        for epoch in range(self._start_epoch, n_epochs + 1):
+        for epoch in range(self._start_epoch, end_epoch + 1):
             self.model.train()
             epoch_loss = 0.0
 
