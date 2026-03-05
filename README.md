@@ -36,7 +36,7 @@ LoRAPipeline.solve(problem_text)
 ```
 BigModel (frozen, 101M params)
   256-dim hidden  ·  128 layers  ·  8 heads  ·  BERT backbone
-  Checkpoint: big_model_data/big_model.pt
+  Checkpoints: big_model_data/big_model_latest.pt  /  big_model_data/big_model_best.pt
 
 LoRA Patch (per problem type, ~800K params)
   Applied to last 32 attention layers (Q, K, V projections)
@@ -85,16 +85,28 @@ python -m big_model.pretrain --epochs 2 --steps 10
 
 What happens each epoch:
 - **Code datasets**: problems + solutions byte-encoded → 15% tokens masked → predict masked bytes (cross-entropy)
-- Checkpoint saved to `big_model_data/big_model.pt` after every epoch
+- Two checkpoints saved after every epoch:
+  - `big_model_data/big_model_latest.pt` — always updated
+  - `big_model_data/big_model_best.pt` — updated only when total loss improves
 
 Progress output:
 ```
-Epoch   1/20  text_loss=4.8901
-Epoch   2/20  text_loss=4.2310
+Epoch   1/20  code_loss=4.8901  math_loss=4.7210  [best]
+Epoch   2/20  code_loss=4.2310  math_loss=4.1005  [best]
 ...
-Epoch  20/20  text_loss=3.1042
-[BigModel] Done. Checkpoint: big_model_data/big_model.pt
+Epoch  20/20  code_loss=3.1042  math_loss=3.0891
+[BigModel] Done. Latest: big_model_data/big_model_latest.pt  Best: big_model_data/big_model_best.pt
 ```
+
+#### Resuming pretraining
+
+Training resumes **automatically** — no extra flag needed. Just re-run the same command:
+
+```bash
+python -m big_model.pretrain --epochs 20 --steps 200
+```
+
+On startup the script checks for `big_model_data/big_model_latest.pt` and `big_model_data/train_state.json`. If found, it loads the weights and picks up from where it left off (correct epoch, step count, and best loss). If not found, it starts from scratch.
 
 ### Step 4 — Run the demo  ⬜
 
