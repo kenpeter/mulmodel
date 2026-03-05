@@ -73,40 +73,52 @@ python download_data.py --leetcode    # LeetCode (requires HF access request)
 
 Re-running resumes automatically — HuggingFace caches downloaded shards.
 
-### Step 3 — Pretrain BigModel  ⬜
+### Step 3 — Pretrain BigModel  🔄 In Progress
+
+**Architecture:** GPT-style causal language model (next-token prediction on byte sequences)
 
 ```bash
-# GPU (recommended — 4070 12GB, ~2 min/epoch)
+# GPU (recommended — 4070 12GB)
 python -m big_model.pretrain --epochs 20 --steps 200
 
 # CPU smoke-test only (very slow)
 python -m big_model.pretrain --epochs 2 --steps 10
 ```
 
+`--epochs N` means **train N more epochs** from wherever training left off.
+
 What happens each epoch:
-- **Code datasets**: problems + solutions byte-encoded → 15% tokens masked → predict masked bytes (cross-entropy)
+- Coding problems + solutions byte-encoded → predict next byte (causal cross-entropy)
 - Two checkpoints saved after every epoch:
   - `big_model_data/big_model_latest.pt` — always updated
-  - `big_model_data/big_model_best.pt` — updated only when total loss improves
+  - `big_model_data/big_model_best.pt` — updated only when loss improves
 
-Progress output:
-```
-Epoch   1/20  code_loss=4.8901  math_loss=4.7210  [best]
-Epoch   2/20  code_loss=4.2310  math_loss=4.1005  [best]
-...
-Epoch  20/20  code_loss=3.1042  math_loss=3.0891
-[BigModel] Done. Latest: big_model_data/big_model_latest.pt  Best: big_model_data/big_model_best.pt
-```
+#### Training Progress
+
+| Epoch | code_loss | Notes |
+|-------|-----------|-------|
+| 1 | 5.52 | start (≈ log(256) = random) |
+| 20 | 1.63 | first 20-epoch run |
+| 943 | 0.935 | interrupted at epoch 943/1000 |
+
+Loss is steadily decreasing — longer training = better generations.
 
 #### Resuming pretraining
 
-Training resumes **automatically** — no extra flag needed. Just re-run the same command:
+Training resumes **automatically** — just re-run:
 
 ```bash
 python -m big_model.pretrain --epochs 20 --steps 200
 ```
 
-On startup the script checks for `big_model_data/big_model_latest.pt` and `big_model_data/train_state.json`. If found, it loads the weights and picks up from where it left off (correct epoch, step count, and best loss). If not found, it starts from scratch.
+Loads `big_model_latest.pt` + `train_state.json` and continues from the last completed epoch. Use `--fresh` to start from scratch.
+
+#### Chat with the model
+
+```bash
+python -m big_model.chat
+python -m big_model.chat --temp 0.7 --top_k 40 --tokens 512
+```
 
 ### Step 4 — Run the demo  ⬜
 
