@@ -1,24 +1,25 @@
 """
-BigModel: 256-wide, 128-layer transformer backbone.
+BigModel: 256-wide, 128-layer transformer backbone (GPT-style causal LM).
 
-Uses HuggingFace BertConfig + BertModel internally.
-Produces 256-dim embeddings from numeric or text inputs.
+Uses HuggingFace GPT2Config + GPT2Model internally.
+Produces 256-dim embeddings from numeric or text inputs,
+and can generate text autoregressively.
 
 Architecture:
   Numeric input: scalar floats → projected to D_MODEL via Linear(1, 256)
-  Text input:    byte tokens   → looked up in BERT's word embedding table
-  Transformer:   128 layers, 256 hidden, 8 heads, 1024 FFN
+  Text input:    byte tokens   → looked up in GPT2's word embedding table
+  Transformer:   128 layers, 256 hidden, 8 heads, 1024 FFN  (causal attention)
   Output:        mean-pooled hidden states → 256-dim embedding
+                 OR per-token logits for next-token prediction / generation
 
 Params: ~101M  (fits in 12GB VRAM; ~400MB on disk)
 """
 from __future__ import annotations
 
 import os
-import numpy as np
 import torch
 import torch.nn as nn
-from transformers import BertConfig, BertModel
+from transformers import GPT2Config, GPT2Model
 
 D_MODEL    = 256      # hidden width
 N_LAYERS   = 128      # transformer depth
@@ -28,43 +29,46 @@ MAX_SEQ    = 128      # maximum sequence length (tokens)
 BYTE_VOCAB = 256      # byte-level vocabulary (0–255)
 
 
-def _make_bert_config() -> BertConfig:
-    return BertConfig(
-        hidden_size=D_MODEL,
-        num_hidden_layers=N_LAYERS,
-        num_attention_heads=N_HEADS,
-        intermediate_size=FFN_DIM,
+def _make_gpt2_config() -> GPT2Config:
+    return GPT2Config(
         vocab_size=BYTE_VOCAB,
-        max_position_embeddings=MAX_SEQ,
-        hidden_dropout_prob=0.1,
-        attention_probs_dropout_prob=0.1,
-        type_vocab_size=1,
+        n_embd=D_MODEL,
+        n_layer=N_LAYERS,
+        n_head=N_HEADS,
+        n_inner=FFN_DIM,
+        n_positions=MAX_SEQ,
+        resid_pdrop=0.1,
+        embd_pdrop=0.1,
+        attn_pdrop=0.1,
     )
 
 
 class BigModel(nn.Module):
     """
-    256-wide, 128-layer transformer backbone.
+    256-wide, 128-layer causal transformer backbone.
 
     Two input modes:
       numeric — raw float values projected to D_MODEL via numeric_proj
-      text    — byte-encoded strings looked up in BERT's word embeddings
+      text    — byte-encoded strings looked up in GPT2's word embeddings
 
-    Output: 256-dim mean-pooled embedding (one vector per input sample).
+    Output: 256-dim mean-pooled embedding (one vector per input sample),
+            OR per-token logits for causal language modeling / generation.
     """
 
     EMB_DIM: int = D_MODEL
 
     def __init__(self) -> None:
         super().__init__()
-        cfg = _make_bert_config()
-        self.bert = BertModel(cfg, add_pooling_layer=False)
+        cfg = _make_gpt2_config()
+        self.gpt2 = GPT2Model(cfg)
 
         # Numeric input: project each scalar float → D_MODEL
         self.numeric_proj = nn.Linear(1, D_MODEL)
 
-        # Pretraining head
-        self.mask_head_text = nn.Linear(D_MODEL, BYTE_VOCAB)   # predict masked byte
+        # Causal LM head: predict next byte token
+        # Weight-tied to token embeddings (standard GPT practice)
+        self.lm_head = nn.Linear(D_MODEL, BYTE_VOCAB, bias=False)
+        self.lm_head.weight = self.gpt2.wte.weight
 
     # ── internal helpers ──────────────────────────────────────────────────────
 
@@ -74,11 +78,12 @@ class BigModel(nn.Module):
         input_ids: torch.Tensor | None = None,
         attention_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """Run BERT encoder, return full hidden states (B, S, D)."""
-        out = self.bert(
+        """Run GPT2 encoder, return full hidden states (B, S, D)."""
+        out = self.gpt2(
             input_ids=input_ids,
             inputs_embeds=inputs_embeds,
             attention_mask=attention_mask,
+            use_cache=False,
         )
         return out.last_hidden_state
 
@@ -117,25 +122,96 @@ class BigModel(nn.Module):
         hs = self._run(input_ids=input_ids, attention_mask=attention_mask)
         return self._mean_pool(hs, attention_mask.float())
 
-    # ── pretraining forward passes ────────────────────────────────────────────
+    # ── pretraining forward pass ──────────────────────────────────────────────
 
-    def pretrain_text(
-        self, input_ids: torch.Tensor, mask: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    def pretrain_causal(self, input_ids: torch.Tensor) -> torch.Tensor:
         """
-        Masked byte modeling for text sequences.
+        Causal (next-token) language modeling for text sequences.
 
         input_ids: (B, S) long — byte token ids
-        mask:      (B, S) bool — True = masked
-        returns logits (N, BYTE_VOCAB), targets (N,)
+        returns:   scalar cross-entropy loss
+
+        Position i predicts token i+1. Padding bytes (0) excluded from loss.
         """
-        masked_ids       = input_ids.clone()
-        masked_ids[mask] = 0                               # mask token id = 0
-        attn             = (input_ids != 0).long()
-        hs               = self._run(input_ids=masked_ids, attention_mask=attn)
-        logits           = self.mask_head_text(hs[mask])   # (N, BYTE_VOCAB)
-        targets          = input_ids[mask]                 # (N,)
-        return logits, targets
+        attention_mask = (input_ids != 0).long()
+        hs = self._run(input_ids=input_ids, attention_mask=attention_mask)  # (B, S, D)
+        logits = self.lm_head(hs)                                            # (B, S, V)
+
+        shift_logits = logits[:, :-1, :].contiguous()    # (B, S-1, V)
+        shift_labels = input_ids[:, 1:].contiguous()     # (B, S-1)
+
+        return nn.functional.cross_entropy(
+            shift_logits.view(-1, BYTE_VOCAB),
+            shift_labels.view(-1),
+            ignore_index=0,
+        )
+
+    # ── text generation ───────────────────────────────────────────────────────
+
+    def generate(
+        self,
+        prompt: str,
+        max_new_tokens: int = 256,
+        temperature: float = 0.8,
+        top_k: int = 50,
+    ) -> str:
+        """
+        Autoregressive text generation from a string prompt.
+
+        prompt:          input text (byte-encoded)
+        max_new_tokens:  maximum tokens to generate
+        temperature:     sampling temperature (lower = more deterministic)
+        top_k:           top-k sampling (0 = full distribution)
+        returns:         generated string (prompt not included)
+        """
+        self.eval()
+        device = next(self.parameters()).device
+
+        max_prompt_len = MAX_SEQ - min(max_new_tokens, MAX_SEQ // 2)
+        b = list(prompt.encode("utf-8", errors="replace"))[:max_prompt_len]
+        if not b:
+            b = [32]  # space byte as minimal non-empty prompt
+
+        ids = torch.tensor([b], dtype=torch.long, device=device)
+
+        generated_ids: list[int] = []
+        past_key_values = None
+
+        with torch.no_grad():
+            for _ in range(max_new_tokens):
+                if past_key_values is None:
+                    input_ids = ids
+                else:
+                    input_ids = torch.tensor(
+                        [[generated_ids[-1]]], dtype=torch.long, device=device
+                    )
+
+                out = self.gpt2(
+                    input_ids=input_ids,
+                    past_key_values=past_key_values,
+                    use_cache=True,
+                )
+                past_key_values = out.past_key_values
+
+                logits = self.lm_head(out.last_hidden_state[:, -1, :])  # (1, V)
+
+                if temperature != 1.0:
+                    logits = logits / temperature
+
+                if top_k > 0:
+                    values, _ = torch.topk(logits, min(top_k, logits.size(-1)))
+                    threshold = values[:, -1].unsqueeze(-1)
+                    logits = logits.masked_fill(logits < threshold, float("-inf"))
+
+                probs = torch.softmax(logits, dim=-1)
+                next_id = torch.multinomial(probs, num_samples=1).item()
+
+                if next_id == 0:
+                    break
+
+                generated_ids.append(next_id)
+
+        return bytes(generated_ids).decode("utf-8", errors="replace")
 
     # ── persistence ───────────────────────────────────────────────────────────
 

@@ -37,7 +37,6 @@ STATE_PATH      = "big_model_data/train_state.json"
 BATCH_SIZE      = 8
 LR              = 1e-4
 WARMUP_STEPS    = 200
-MASK_PROB       = 0.15
 
 
 # ── Coding dataset loader ─────────────────────────────────────────────────────
@@ -158,34 +157,26 @@ class BigModelPretrainer:
             print("  [BigModel] WARNING: 128-layer model on CPU is very slow.")
             print("             Use your 4070 GPU — set CUDA_VISIBLE_DEVICES=0")
 
-    def _encode_texts(self, texts: list[str]) -> tuple[torch.Tensor, torch.Tensor]:
-        """Byte-encode a list of strings → (input_ids, mask) tensors."""
+    def _encode_texts(self, texts: list[str]) -> torch.Tensor:
+        """Byte-encode a list of strings → input_ids tensor."""
         ids_list = []
         for text in texts:
             b      = list(text.encode("utf-8", errors="replace"))[:MAX_SEQ]
             padded = b + [0] * (MAX_SEQ - len(b))
             ids_list.append(padded)
-
-        input_ids = torch.tensor(ids_list, dtype=torch.long, device=self.device)
-        mask      = (torch.rand(len(texts), MAX_SEQ, device=self.device) < MASK_PROB) \
-                    & (input_ids != 0)
-        for i in range(len(texts)):
-            if not mask[i].any():
-                mask[i, random.randint(0, MAX_SEQ - 1)] = True
-        return input_ids, mask
+        return torch.tensor(ids_list, dtype=torch.long, device=self.device)
 
     # ── Coding batch ──────────────────────────────────────────────────────────
 
-    def _gen_text_batch(self) -> tuple[torch.Tensor, torch.Tensor]:
+    def _gen_text_batch(self) -> torch.Tensor:
         """Coding problems + solutions, byte-encoded."""
         texts = [CodingLoader.next_chunk() for _ in range(BATCH_SIZE)]
         return self._encode_texts(texts)
 
     # ── training ──────────────────────────────────────────────────────────────
 
-    def _step_text(self, input_ids: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
-        logits, targets = self.model.pretrain_text(input_ids, mask)
-        return nn.functional.cross_entropy(logits, targets)
+    def _step_text(self, input_ids: torch.Tensor) -> torch.Tensor:
+        return self.model.pretrain_causal(input_ids)
 
     def train(self, n_epochs: int = 10, steps_per_epoch: int = 50) -> BigModel:
         """
@@ -205,8 +196,8 @@ class BigModelPretrainer:
 
             for _ in range(steps_per_epoch):
                 self.optim.zero_grad()
-                code_ids, code_mask = self._gen_text_batch()
-                loss = self._step_text(code_ids, code_mask)
+                code_ids = self._gen_text_batch()
+                loss = self._step_text(code_ids)
                 loss.backward()
                 nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
                 self.optim.step()

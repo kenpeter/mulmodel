@@ -162,7 +162,7 @@ class LoRAPipeline:
         mask   = (ids != 0).long()
 
         with torch.no_grad():
-            hs  = self.big_model.bert(input_ids=ids, attention_mask=mask).last_hidden_state
+            hs  = self.big_model.gpt2(input_ids=ids, attention_mask=mask).last_hidden_state
             m   = mask.unsqueeze(-1).float()
             emb = (hs * m).sum(dim=1) / m.sum(dim=1).clamp(min=1e-9)
 
@@ -187,11 +187,11 @@ class LoRAPipeline:
         ids    = torch.tensor([padded], dtype=torch.long, device=self.device)
         mask   = (ids != 0).long()
 
-        patch.attach(self.big_model.bert)
+        patch.attach(self.big_model.gpt2)
         patch.eval()
         try:
             with torch.no_grad():
-                hs   = self.big_model.bert(input_ids=ids, attention_mask=mask).last_hidden_state
+                hs   = self.big_model.gpt2(input_ids=ids, attention_mask=mask).last_hidden_state
                 m    = mask.unsqueeze(-1).float()
                 emb  = (hs * m).sum(dim=1) / m.sum(dim=1).clamp(min=1e-9)
                 pred = patch.predict(emb)

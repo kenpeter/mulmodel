@@ -66,7 +66,7 @@ class LoRATrainer:
             (trained LoRAPatch, final training loss)
         """
         patch = LoRAPatch(rank=rank).to(self.device)
-        patch.attach(self.big_model.bert)
+        patch.attach(self.big_model.gpt2)
         patch.train()
         self.big_model.train()   # needed so LoRA hooks compute gradients
 
@@ -107,7 +107,7 @@ class LoRATrainer:
         input_ids = torch.tensor(ids_list, dtype=torch.long, device=self.device)
         attn_mask = (input_ids != 0).long()
 
-        hs  = self.big_model.bert(
+        hs  = self.big_model.gpt2(
             input_ids=input_ids, attention_mask=attn_mask
         ).last_hidden_state                                           # (N, S, D)
 

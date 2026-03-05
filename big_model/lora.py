@@ -24,7 +24,7 @@ from big_model.transformer import D_MODEL, N_LAYERS
 LORA_RANK    = 16
 LORA_ALPHA   = 32.0
 LORA_LAYERS  = 32          # apply to last 32 of 128 layers
-TARGET_PROJS = ["query", "key", "value"]
+TARGET_PROJS = ["c_proj"]  # GPT2 attention output projection (B,S,D)→(B,S,D)
 
 
 # ── LoRA adapter for one linear projection ─────────────────────────────────────
@@ -110,13 +110,13 @@ class LoRAPatch(nn.Module):
 
     # ── hook management ──────────────────────────────────────────────────────
 
-    def attach(self, bert_model) -> None:
-        """Hook LoRA adapters into BERT attention projections."""
+    def attach(self, gpt2_model) -> None:
+        """Hook LoRA adapters into GPT2 attention output projections."""
         assert not self._hooks, "Already attached — call detach() first"
         for i in range(self._start, self._n_total):
-            layer = bert_model.encoder.layer[i]
+            layer = gpt2_model.h[i]
             for proj in TARGET_PROJS:
-                linear  = getattr(layer.attention.self, proj)
+                linear  = getattr(layer.attn, proj)
                 adapter = self.adapters[f"L{i}_{proj}"]
                 self._hooks.append(
                     linear.register_forward_hook(_make_hook(adapter))
