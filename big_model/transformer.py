@@ -65,13 +65,14 @@ class BigModel(nn.Module):
 
     EMB_DIM: int = D_MODEL
 
-    def __init__(self) -> None:
+    def __init__(self, gradient_checkpointing: bool = False) -> None:
         super().__init__()
         cfg = _make_gpt2_config()
         self.gpt2 = GPT2Model(cfg)
-        self.gpt2.gradient_checkpointing_enable(
-            gradient_checkpointing_kwargs={"use_reentrant": False}
-        )
+        if gradient_checkpointing:
+            self.gpt2.gradient_checkpointing_enable(
+                gradient_checkpointing_kwargs={"use_reentrant": False}
+            )
 
         # Numeric input: project each scalar float → D_MODEL
         self.numeric_proj = nn.Linear(1, D_MODEL)
