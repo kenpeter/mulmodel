@@ -1,15 +1,15 @@
 """
-Pretraining script for BigModel (256-wide, 128-layer transformer).
+Pretraining script for BigModel (1024-wide, 96-layer GPT-style causal LM).
 
-Task: Masked Token Modeling (BERT-style)
-  Text → mask 15% bytes → predict masked bytes (cross-entropy)
+Memory strategy:
+  Model in BF16 on GPU  → ~2.3 GB VRAM for weights
+  FP32 optimizer states → ~9.2 GB CPU RAM  (AdamW runs on CPU)
+  Gradient checkpointing → low activation memory
+  Peak VRAM during backward: ~5 GB  (fits comfortably in 12 GB)
 
 Data sources:
   1. deepmind/code_contests  — competitive programming problems + solutions
   2. open-r1/codeforces-cots — Codeforces problems + chain-of-thought solutions
-
-NOT used here: sentiment reviews, product reviews, or any task-specific data.
-Those belong to the tiny specialist models, not the general backbone.
 
 Usage:
   python -m big_model.pretrain                    # 10 epochs
@@ -34,7 +34,7 @@ from big_model.transformer import BigModel, MAX_SEQ, BYTE_VOCAB
 CHECKPOINT_PATH = "big_model_data/big_model_latest.pt"
 BEST_PATH       = "big_model_data/big_model_best.pt"
 STATE_PATH      = "big_model_data/train_state.json"
-BATCH_SIZE      = 8
+BATCH_SIZE      = 2
 LR              = 1e-4
 WARMUP_STEPS    = 200
 
@@ -123,25 +123,37 @@ class CodingLoader:
 
 class BigModelPretrainer:
     """
-    Pretrain BigModel via masked token modeling on:
-      - Coding problems + solutions (deepmind/code_contests, open-r1/codeforces-cots)
+    Pretrain BigModel via causal language modeling on coding datasets.
+
+    Memory layout:
+      - Model in BF16 on GPU  (~2.3 GB VRAM)
+      - FP32 optimizer states on CPU RAM  (~9.2 GB)
+      - Gradient checkpointing reduces activation memory
     """
 
     def __init__(self, device: str | None = None, resume: bool = True) -> None:
-        self.device    = device or ("cuda" if torch.cuda.is_available() else "cpu")
-        self.model     = BigModel().to(self.device)
-        self.optim     = AdamW(self.model.parameters(), lr=LR, weight_decay=0.01)
-        self._step     = 0
-        self._start_epoch = 1
+        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        use_gpu = self.device != "cpu"
 
-        self._best_loss = float("inf")
+        # Build model in FP32 on CPU first (for clean checkpoint loading)
+        self.model = BigModel()
 
         # ── resume from checkpoint ────────────────────────────────────────────
         if resume and os.path.exists(CHECKPOINT_PATH):
-            self.model.load_state_dict(
-                torch.load(CHECKPOINT_PATH, map_location=self.device, weights_only=True)
-            )
-            print(f"  [BigModel] Loaded checkpoint: {CHECKPOINT_PATH}")
+            try:
+                self.model.load_state_dict(
+                    torch.load(CHECKPOINT_PATH, map_location="cpu", weights_only=True),
+                    strict=False,
+                )
+                print(f"  [BigModel] Loaded checkpoint: {CHECKPOINT_PATH}")
+            except RuntimeError as e:
+                print(f"  [BigModel] Checkpoint incompatible — starting fresh.")
+                print(f"             ({e!s:.120})")
+                resume = False
+
+        self._start_epoch = 1
+        self._step        = 0
+        self._best_loss   = float("inf")
         if resume and os.path.exists(STATE_PATH):
             state = json.loads(open(STATE_PATH).read())
             self._start_epoch = state.get("epoch", 1) + 1
@@ -149,16 +161,30 @@ class BigModelPretrainer:
             self._best_loss   = state.get("best_loss", float("inf"))
             print(f"  [BigModel] Resuming from epoch {self._start_epoch}  step {self._step}")
         if not resume:
-            print("  [BigModel] --fresh: starting from scratch")
+            print("  [BigModel] Starting from scratch")
+
+        # ── CPU FP32 params for optimizer (before converting model to BF16) ──
+        # AdamW states (m, v) live on CPU RAM, not VRAM.
+        self._cpu_params = [
+            nn.Parameter(p.detach().float().cpu(), requires_grad=True)
+            for p in self.model.parameters()
+        ]
+        self.optim = AdamW(self._cpu_params, lr=LR, weight_decay=0.01)
+
+        # ── Move model to GPU in BF16 ────────────────────────────────────────
+        if use_gpu:
+            self.model = self.model.cuda().to(torch.bfloat16)
+        else:
+            print("  [BigModel] WARNING: CPU-only mode, training will be slow.")
 
         n = self.model.param_count()
-        print(f"  [BigModel] {n:,} params  device={self.device}")
-        if self.device == "cpu":
-            print("  [BigModel] WARNING: 128-layer model on CPU is very slow.")
-            print("             Use your 4070 GPU — set CUDA_VISIBLE_DEVICES=0")
+        vram = torch.cuda.memory_allocated() / 1e9 if use_gpu else 0
+        print(f"  [BigModel] {n:,} params  BF16 on GPU={use_gpu}")
+        print(f"  [BigModel] VRAM after model load: {vram:.2f} GB")
+        print(f"  [BigModel] FP32 optimizer states on CPU (~{n*8/1e9:.1f} GB)")
 
     def _encode_texts(self, texts: list[str]) -> torch.Tensor:
-        """Byte-encode a list of strings → input_ids tensor."""
+        """Byte-encode a list of strings → input_ids tensor on GPU."""
         ids_list = []
         for text in texts:
             b      = list(text.encode("utf-8", errors="replace"))[:MAX_SEQ]
@@ -173,10 +199,42 @@ class BigModelPretrainer:
         texts = [CodingLoader.next_chunk() for _ in range(BATCH_SIZE)]
         return self._encode_texts(texts)
 
-    # ── training ──────────────────────────────────────────────────────────────
+    # ── CPU-optimizer step ────────────────────────────────────────────────────
 
-    def _step_text(self, input_ids: torch.Tensor) -> torch.Tensor:
-        return self.model.pretrain_causal(input_ids)
+    def _optimizer_step(self) -> None:
+        """
+        1. Clip GPU BF16 gradients.
+        2. Copy BF16 grads → FP32 on CPU.
+        3. Run FP32 AdamW on CPU.
+        4. Copy updated FP32 params → BF16 on GPU.
+        """
+        nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+
+        for gpu_p, cpu_p in zip(self.model.parameters(), self._cpu_params):
+            if gpu_p.grad is not None:
+                if cpu_p.grad is None:
+                    cpu_p.grad = gpu_p.grad.float().cpu()
+                else:
+                    cpu_p.grad.copy_(gpu_p.grad.float())
+                gpu_p.grad = None  # free VRAM immediately
+
+        self.optim.step()
+        self.optim.zero_grad(set_to_none=True)
+
+        # Write updated FP32 params back to BF16 GPU model
+        for gpu_p, cpu_p in zip(self.model.parameters(), self._cpu_params):
+            gpu_p.data.copy_(cpu_p.data.to(device=gpu_p.device, dtype=gpu_p.dtype))
+
+    def _save_checkpoint(self, path: str) -> None:
+        """Save FP32 checkpoint from CPU params (highest precision copy)."""
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+        state = {}
+        for (name, _), cpu_p in zip(self.model.named_parameters(), self._cpu_params):
+            state[name] = cpu_p.data.cpu()
+        torch.save(state, path)
+        print(f"  [BigModel] Saved → {path}")
+
+    # ── training ──────────────────────────────────────────────────────────────
 
     def train(self, n_epochs: int = 10, steps_per_epoch: int = 50) -> BigModel:
         """
@@ -196,12 +254,10 @@ class BigModelPretrainer:
             epoch_loss = 0.0
 
             for _ in range(steps_per_epoch):
-                self.optim.zero_grad()
                 code_ids = self._gen_text_batch()
-                loss = self._step_text(code_ids)
+                loss = self.model.pretrain_causal(code_ids)
                 loss.backward()
-                nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
-                self.optim.step()
+                self._optimizer_step()
                 if self._step < WARMUP_STEPS:
                     scheduler.step()
                 self._step   += 1
@@ -212,14 +268,14 @@ class BigModelPretrainer:
             if improved:
                 self._best_loss = total_loss
             print(
-                f"  Epoch {epoch:3d}/{n_epochs}  "
+                f"  Epoch {epoch:3d}/{end_epoch}  "
                 f"code_loss={total_loss:.4f}"
                 + ("  [best]" if improved else "")
             )
             os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)
-            self.model.save(CHECKPOINT_PATH)
+            self._save_checkpoint(CHECKPOINT_PATH)
             if improved:
-                self.model.save(BEST_PATH)
+                self._save_checkpoint(BEST_PATH)
             open(STATE_PATH, "w").write(
                 json.dumps({"epoch": epoch, "step": self._step, "best_loss": self._best_loss})
             )
