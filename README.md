@@ -14,7 +14,7 @@ pip install -r requirements.txt
 ## Train
 
 ```bash
-python train.py --epochs 10 --warmup-steps 1000 --lr 3e-4
+python train.py --epochs 10 --warmup-steps 100 --lr 3e-4
 ```
 
 Resume:

@@ -10,7 +10,8 @@ To set up a new experiment, work with the user to:
 2. **Create the branch**: `git checkout -b autoresearch/<tag>` from current main.
 3. **Read the in-scope files**:
    - `README.md` — repository context.
-   - `train.py` — the file you modify. Model architecture, optimizer, hyperparameters, training loop. Everything is fair game.
+   - `train.py` — training loop, optimizer, hyperparameters, data loading.
+   - `transformer.py` — model architecture (`MODEL_CONFIG`, `BigModel`, attention, blocks).
 4. **Verify data exists**: Check that `data/` contains training data. If empty, tell the human.
 5. **Initialize results.tsv**: Create `results.tsv` with just the header row. The baseline will be recorded after the first run.
 6. **Confirm and go**: Confirm setup looks good.
@@ -26,12 +27,14 @@ python train.py --time-limit 300 > run.log 2>&1
 ```
 
 **What you CAN do:**
-- Modify `train.py` — this is the only file you edit. Everything is fair game: model architecture, optimizer, hyperparameters, batch size, learning rate, etc.
+- Modify `train.py` — training loop, optimizer, hyperparameters, batch size, learning rate, scheduler, etc.
+- Modify `transformer.py` — model architecture, `MODEL_CONFIG`, attention, layers, activations, etc.
 
 **What you CANNOT do:**
-- Modify the data pipeline or training data in `data/`.
+- Touch anything in `data/` — training data is read-only.
+- Touch `analysis.ipynb`, `results.tsv`, `requirements.txt`, `pyproject.toml`, or any agent/config files.
 - Modify the `--time-limit` flag logic — the 5-minute budget is sacred.
-- Install new packages beyond what's in `big_model/requirements.txt`.
+- Install new packages.
 
 **The goal: get `train_loss` as low as possible.** Since time is fixed at 5 min per run, focus on better architectures, optimizers, and hyperparams that make the most of the budget.
 

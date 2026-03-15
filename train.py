@@ -28,7 +28,7 @@ class CodeforcesDataset(Dataset):
                 gen  = table["generation"][i].as_py() or ""
                 texts.append(desc + "\n" + gen)
 
-        all_bytes = b"\x00".join(t.encode("utf-8") for t in texts)
+        all_bytes = bytearray(b"\x00".join(t.encode("utf-8") for t in texts))
         self.data = torch.frombuffer(all_bytes, dtype=torch.uint8).long()
         self.ctx  = context_length
         print(f"[Data] {len(arrow_files)} shards, {len(texts):,} entries, "
@@ -92,7 +92,12 @@ def train(args):
         total_loss, steps = 0.0, 0
         epoch_start = time.time()
 
+        done = False
         for x, y in loader:
+            if args.time_limit and (time.time() - train_start) >= args.time_limit:
+                done = True
+                break
+
             # LR warmup / cosine decay
             lr = get_lr(global_step, args.warmup_steps, total_steps, args.lr)
             for g in optimizer.param_groups:
@@ -112,7 +117,14 @@ def train(args):
             steps       += 1
             global_step += 1
 
+            if global_step % args.log_every == 0:
+                avg = total_loss / steps
+                elapsed = time.time() - train_start
+                print(f"  step {global_step}  loss {avg:.4f}  lr {lr:.2e}  elapsed {elapsed:.0f}s", flush=True)
+
         training_seconds += time.time() - epoch_start
+        if done:
+            break
         avg_loss = total_loss / max(steps, 1)
         lr_now   = get_lr(global_step, args.warmup_steps, total_steps, args.lr)
         print(f"epoch {epoch+1}/{args.epochs}  loss {avg_loss:.4f}  lr {lr_now:.2e}  steps {global_step}")
@@ -141,9 +153,11 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--epochs",         type=int,   default=10)
     p.add_argument("--lr",             type=float, default=3e-4)
-    p.add_argument("--warmup-steps",   type=int,   default=1000,
+    p.add_argument("--warmup-steps",   type=int,   default=100,
                    help="Linear warmup steps before cosine decay")
-    p.add_argument("--batch-size",     type=int,   default=8)
+    p.add_argument("--batch-size",     type=int,   default=64)
+    p.add_argument("--log-every",      type=int,   default=20,
+                   help="Print loss every N steps")
     p.add_argument("--save-every",     type=int,   default=1)
     p.add_argument("--checkpoint-dir", type=str,   default="checkpoints")
     p.add_argument("--resume",         type=str,   default=None)
