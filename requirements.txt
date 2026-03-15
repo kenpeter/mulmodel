@@ -1,0 +1,6 @@
+torch>=2.7.0
+sageattention>=2.2.0
+transformers>=5.2.0
+numpy>=1.24.0
+matplotlib>=3.7.0
+pandas>=2.0.0

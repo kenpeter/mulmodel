@@ -10,7 +10,7 @@ To set up a new experiment, work with the user to:
 2. **Create the branch**: `git checkout -b autoresearch/<tag>` from current main.
 3. **Read the in-scope files**:
    - `README.md` — repository context.
-   - `big_model/pretrain.py` — the file you modify. Model architecture, optimizer, hyperparameters, training loop. Everything is fair game.
+   - `train.py` — the file you modify. Model architecture, optimizer, hyperparameters, training loop. Everything is fair game.
 4. **Verify data exists**: Check that `data/` contains training data. If empty, tell the human.
 5. **Initialize results.tsv**: Create `results.tsv` with just the header row. The baseline will be recorded after the first run.
 6. **Confirm and go**: Confirm setup looks good.
@@ -22,11 +22,11 @@ Once you get confirmation, kick off the experimentation.
 Each experiment runs on a single GPU for a **fixed time budget of 5 minutes** (wall clock training time). Launch it as:
 
 ```
-python -m big_model.pretrain --time-limit 300 > run.log 2>&1
+python train.py --time-limit 300 > run.log 2>&1
 ```
 
 **What you CAN do:**
-- Modify `big_model/pretrain.py` — this is the only file you edit. Everything is fair game: model architecture, optimizer, hyperparameters, batch size, learning rate, etc.
+- Modify `train.py` — this is the only file you edit. Everything is fair game: model architecture, optimizer, hyperparameters, batch size, learning rate, etc.
 
 **What you CANNOT do:**
 - Modify the data pipeline or training data in `data/`.
@@ -55,7 +55,7 @@ peak_vram_mb:     8590.2
 Extract the key metric:
 
 ```
-grep "^train_loss:" run.log
+grep "^train_loss:\|^peak_vram_mb:" run.log
 ```
 
 ## Logging results
@@ -91,9 +91,9 @@ The experiment runs on a dedicated branch (e.g. `autoresearch/mar14`).
 LOOP FOREVER:
 
 1. Look at the git state: the current branch/commit we're on
-2. Tune `big_model/pretrain.py` with an experimental idea by directly hacking the code.
+2. Tune `train.py` with an experimental idea by directly hacking the code.
 3. git commit
-4. Run the experiment: `python -m big_model.pretrain --time-limit 300 > run.log 2>&1`
+4. Run the experiment: `python train.py --time-limit 300 > run.log 2>&1`
 5. Read out the results: `grep "^train_loss:\|^peak_vram_mb:" run.log`
 6. If the grep output is empty, the run crashed. Run `tail -n 50 run.log` to read the stack trace and attempt a fix. If you can't fix it after a few attempts, give up and discard.
 7. Record the results in `results.tsv` (do NOT commit this file — leave it untracked)
