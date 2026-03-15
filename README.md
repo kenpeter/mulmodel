@@ -50,7 +50,7 @@ Set `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` to reduce fragmentation.
 | `--warmup-steps` | 100 | linear warmup before cosine decay |
 | `--batch-size` | 8 | per-step batch size |
 | `--grad-accum` | 8 | gradient accumulation steps (effective batch = batch_size × grad_accum) |
-| `--log-every` | 100 | print loss every N steps |
+| `--log-every` | 500 | print loss every N steps |
 | `--time-limit` | — | stop after N seconds |
 
 ## Model

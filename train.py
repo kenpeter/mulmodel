@@ -193,7 +193,7 @@ def main():
         default=8,
         help="Gradient accumulation steps (effective batch = batch_size * grad_accum)",
     )
-    p.add_argument("--log-every", type=int, default=100, help="Print loss every N steps")
+    p.add_argument("--log-every", type=int, default=500, help="Print loss every N steps")
     p.add_argument("--save-every", type=int, default=1)
     p.add_argument("--checkpoint-dir", type=str, default="checkpoints")
     p.add_argument("--resume", type=str, default=None)
