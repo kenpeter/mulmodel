@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pt
+*.bin
+run.log
+*.log
+.ruff_cache/
+autoresearch/
+data/
+checkpoints/
+results.tsv
