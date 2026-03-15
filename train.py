@@ -196,7 +196,14 @@ def main():
     p.add_argument("--log-every", type=int, default=500, help="Print loss every N steps")
     p.add_argument("--save-every", type=int, default=1)
     p.add_argument("--checkpoint-dir", type=str, default="checkpoints")
-    p.add_argument("--resume", type=str, default=None)
+    p.add_argument(
+        "--resume",
+        type=str,
+        default=None,
+        nargs="?",
+        const="checkpoints/latest.pt",
+        help="Resume from checkpoint (default: checkpoints/latest.pt)",
+    )
     p.add_argument("--time-limit", type=int, default=None)
     args = p.parse_args()
     train(args)
