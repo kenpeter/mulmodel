@@ -36,7 +36,7 @@ python train.py --time-limit 300 > run.log 2>&1
 - Modify the `--time-limit` flag logic — the 5-minute budget is sacred.
 - Install new packages.
 
-**The goal: get `train_loss` as low as possible.** Since time is fixed at 5 min per run, focus on better architectures, optimizers, and hyperparams that make the most of the budget.
+**The goal: get `train_loss` ≤ 0.5.** Since time is fixed at 5 min per run, focus on better architectures, optimizers, and hyperparams that make the most of the budget.
 
 **VRAM** is a soft constraint — the GPU has 12 GB. OOM = crash = discard.
 
