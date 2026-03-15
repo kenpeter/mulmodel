@@ -106,12 +106,24 @@ def train(args):
     loss_fn = nn.CrossEntropyLoss()
     train_start = time.time()
     training_seconds = 0.0
+    micro_step = 0  # counts raw iterations within an accumulation window
+
+    def save_checkpoint(epoch, avg_loss, tag="latest"):
+        ck = {
+            "model": model.state_dict(),
+            "optimizer": optimizer.state_dict(),
+            "epoch": epoch,
+            "step": global_step,
+            "loss": avg_loss,
+            "best_loss": best_loss,
+        }
+        torch.save(ck, os.path.join(args.checkpoint_dir, f"{tag}.pt"))
 
     for epoch in range(start_epoch, args.epochs):
         model.train()
         total_loss, steps = 0.0, 0
-        accum_loss = 0.0
         epoch_start = time.time()
+        optimizer.zero_grad(set_to_none=True)
 
         done = False
         for x, y in loader:
@@ -128,26 +140,32 @@ def train(args):
             with torch.autocast(device_type="cuda", dtype=dtype):
                 logits = model(x)
                 loss = loss_fn(logits.reshape(-1, logits.size(-1)), y.reshape(-1))
-                loss = loss / args.grad_accum  # normalize loss for accumulation
+                loss = loss / args.grad_accum  # normalize for accumulation
 
-            optimizer.zero_grad(set_to_none=True)
             loss.backward()
-
-            if (global_step + 1) % args.grad_accum == 0:
-                nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                optimizer.step()
-                global_step += 1
+            micro_step += 1
 
             total_loss += loss.item() * args.grad_accum
             steps += 1
 
-            if global_step % args.log_every == 0:
-                avg = total_loss / steps
-                elapsed = time.time() - train_start
-                print(
-                    f"  step {global_step}  loss {avg:.4f}  lr {lr:.2e}  elapsed {elapsed:.0f}s",
-                    flush=True,
-                )
+            if micro_step % args.grad_accum == 0:
+                nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                optimizer.step()
+                optimizer.zero_grad(set_to_none=True)
+                global_step += 1
+
+                if global_step % args.log_every == 0:
+                    avg = total_loss / steps
+                    elapsed = time.time() - train_start
+                    print(
+                        f"  step {global_step}  loss {avg:.4f}  lr {lr:.2e}  elapsed {elapsed:.0f}s",
+                        flush=True,
+                    )
+
+                if global_step % args.save_steps == 0:
+                    avg = total_loss / max(steps, 1)
+                    save_checkpoint(epoch, avg, "latest")
+                    print(f"  [ckpt] step {global_step}  loss {avg:.4f}", flush=True)
 
         training_seconds += time.time() - epoch_start
         if done:
@@ -162,17 +180,9 @@ def train(args):
         if is_best:
             best_loss = avg_loss
         if (epoch + 1) % args.save_every == 0 or is_best:
-            ck = {
-                "model": model.state_dict(),
-                "optimizer": optimizer.state_dict(),
-                "epoch": epoch,
-                "step": global_step,
-                "loss": avg_loss,
-                "best_loss": best_loss,
-            }
-            torch.save(ck, os.path.join(args.checkpoint_dir, "latest.pt"))
+            save_checkpoint(epoch, avg_loss, "latest")
             if is_best:
-                torch.save(ck, os.path.join(args.checkpoint_dir, "best.pt"))
+                save_checkpoint(epoch, avg_loss, "best")
                 print(f"  [best] {best_loss:.4f}")
 
     peak_vram = (
@@ -194,7 +204,7 @@ def main():
     p.add_argument(
         "--warmup-steps",
         type=int,
-        default=100,
+        default=0,
         help="Linear warmup steps before cosine decay",
     )
     p.add_argument("--batch-size", type=int, default=8)
@@ -204,9 +214,8 @@ def main():
         default=8,
         help="Gradient accumulation steps (effective batch = batch_size * grad_accum)",
     )
-    p.add_argument(
-        "--log-every", type=int, default=3000, help="Print loss every N steps"
-    )
+    p.add_argument("--log-every", type=int, default=1, help="Print loss every N steps")
+    p.add_argument("--save-steps", type=int, default=500, help="Save checkpoint every N optimizer steps")
     p.add_argument("--save-every", type=int, default=1)
     p.add_argument("--checkpoint-dir", type=str, default="checkpoints")
     p.add_argument(

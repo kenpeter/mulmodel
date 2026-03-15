@@ -17,7 +17,13 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 ## Train
 
 ```bash
-python train.py --epochs 10 --warmup-steps 100 --lr 3e-4
+python train.py --epochs 10 --lr 3e-4
+```
+
+For faster feedback (step increments every batch instead of every 8 batches):
+
+```bash
+python train.py --grad-accum 1
 ```
 
 Resume:
@@ -47,10 +53,10 @@ Set `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` to reduce fragmentation.
 |------|---------|-|
 | `--epochs` | 10 | passes over data |
 | `--lr` | 3e-4 | peak learning rate |
-| `--warmup-steps` | 100 | linear warmup before cosine decay |
+| `--warmup-steps` | 0 | linear warmup before cosine decay |
 | `--batch-size` | 8 | per-step batch size |
 | `--grad-accum` | 8 | gradient accumulation steps (effective batch = batch_size × grad_accum) |
-| `--log-every` | 500 | print loss every N steps |
+| `--log-every` | 1 | print loss every N steps |
 | `--time-limit` | — | stop after N seconds |
 
 ## Model
