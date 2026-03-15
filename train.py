@@ -66,7 +66,9 @@ def train(args):
     model = BigModel(MODEL_CONFIG).to(device=device, dtype=dtype)
     print(f"[BigModel] {model.num_params():,} params  {dtype} on {device}")
 
-    dataset = CodeforcesDataset("data/code/codeforces_cots", MODEL_CONFIG["context_length"])
+    dataset = CodeforcesDataset(
+        "data/code/codeforces_cots", MODEL_CONFIG["context_length"]
+    )
     loader = DataLoader(
         dataset,
         batch_size=args.batch_size,
@@ -91,10 +93,14 @@ def train(args):
         start_epoch = ck.get("epoch", 0) + 1
         global_step = ck.get("step", 0)
         best_loss = ck.get("best_loss", float("inf"))
-        print(f"[Resume] epoch {start_epoch}, step {global_step}, best_loss {best_loss:.4f}")
+        print(
+            f"[Resume] epoch {start_epoch}, step {global_step}, best_loss {best_loss:.4f}"
+        )
 
     total_steps = args.epochs * len(loader)
-    print(f"[Schedule] warmup {args.warmup_steps} steps, total {total_steps} steps, lr {args.lr}")
+    print(
+        f"[Schedule] warmup {args.warmup_steps} steps, total {total_steps} steps, lr {args.lr}"
+    )
 
     os.makedirs(args.checkpoint_dir, exist_ok=True)
     loss_fn = nn.CrossEntropyLoss()
@@ -169,7 +175,9 @@ def train(args):
                 torch.save(ck, os.path.join(args.checkpoint_dir, "best.pt"))
                 print(f"  [best] {best_loss:.4f}")
 
-    peak_vram = torch.cuda.max_memory_allocated() / 1024**2 if torch.cuda.is_available() else 0
+    peak_vram = (
+        torch.cuda.max_memory_allocated() / 1024**2 if torch.cuda.is_available() else 0
+    )
     print("---")
     print(f"train_loss:       {best_loss:.6f}")
     print(f"training_seconds: {training_seconds:.1f}")
@@ -184,7 +192,10 @@ def main():
     p.add_argument("--epochs", type=int, default=10)
     p.add_argument("--lr", type=float, default=3e-4)
     p.add_argument(
-        "--warmup-steps", type=int, default=100, help="Linear warmup steps before cosine decay"
+        "--warmup-steps",
+        type=int,
+        default=100,
+        help="Linear warmup steps before cosine decay",
     )
     p.add_argument("--batch-size", type=int, default=8)
     p.add_argument(
@@ -193,7 +204,9 @@ def main():
         default=8,
         help="Gradient accumulation steps (effective batch = batch_size * grad_accum)",
     )
-    p.add_argument("--log-every", type=int, default=500, help="Print loss every N steps")
+    p.add_argument(
+        "--log-every", type=int, default=3000, help="Print loss every N steps"
+    )
     p.add_argument("--save-every", type=int, default=1)
     p.add_argument("--checkpoint-dir", type=str, default="checkpoints")
     p.add_argument(
