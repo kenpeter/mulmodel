@@ -38,11 +38,12 @@ tail -f run.log
 
 ### GPU Memory
 
-If you encounter OOM, use gradient accumulation:
+If you encounter OOM, reduce context length or use gradient accumulation:
 
 ```bash
 python train.py --batch-size 8 --grad-accum 8   # effective batch = 64
 python train.py --batch-size 4 --grad-accum 16  # lower memory, same effective batch
+python train.py --ctx-len 256   # shorter sequences = less memory
 ```
 
 Set `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` to reduce fragmentation.
@@ -58,6 +59,7 @@ Set `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` to reduce fragmentation.
 | `--grad-accum` | 8 | gradient accumulation steps (effective batch = batch_size × grad_accum) |
 | `--log-every` | 1 | print loss every N steps |
 | `--time-limit` | — | stop after N seconds |
+| `--ctx-len` | 512 | context length (lower = less memory) |
 
 ## Model
 

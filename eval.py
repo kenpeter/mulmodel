@@ -65,7 +65,9 @@ def compute_perplexity(model, loader, device, dtype, max_batches=200):
 # ── Chat mode ─────────────────────────────────────────────────────────────────
 
 def build_prompt(problem: str) -> str:
-    """Wrap a problem statement in the training-data format the model learned."""
+    """Wrap a problem statement in the training-data format the model learned.
+    Training format: description + "\\n" + generation (no system prompt).
+    """
     return problem.strip() + "\n"
 
 
@@ -158,17 +160,37 @@ def main():
     avg_loss, ppl = compute_perplexity(model, val_loader, device, dtype, args.max_batches)
     print(f"  val_loss={avg_loss:.4f}  perplexity={ppl:.2f}")
 
-    # Quick generation samples
-    samples = [
-        "Given an array of N integers, find the maximum subarray sum.\n",
-        "def solve(n, arr):\n    # find pairs summing to target\n",
-        "You are given a tree with N nodes. Find the diameter.\n",
+    # Quick generation samples — match exact training format: desc + "\n" (no system prompt)
+    problems = [
+        (
+            "Maximize the Last Element",
+            """You are given an array a of n integers, where n is odd.
+
+In one operation, you will remove two adjacent elements from the array a, and then concatenate the remaining parts of the array.
+
+You will repeatedly perform this operation until exactly one element remains in a.
+
+Find the maximum possible value of the remaining element in a.
+
+Input: first line t test cases. Each test case: n on first line, then n integers.
+Output: for each test case, output a single integer.""",
+        ),
+        (
+            "Two Sum",
+            """Given an array of n integers and a target T, determine if there exist two distinct indices i and j such that a[i] + a[j] = T.
+
+Input: first line n and T, second line n integers.
+Output: YES if such a pair exists, NO otherwise.""",
+        ),
     ]
     print(f"\n[Samples] max_new_tokens={args.max_new_tokens}  temp={args.temperature}  top_k={args.top_k}")
-    for prompt in samples:
+    for title, problem_body in problems:
+        prompt = build_prompt(problem_body)
         out = generate(model, prompt, args.max_new_tokens, device, dtype,
                        args.temperature, args.top_k)
-        print(f"\n{prompt}{out}")
+        print(f"\n{'='*60}\n# {title}\n{'='*60}")
+        print(f"[Prompt]\n{prompt}")
+        print(f"[Model output]\n{out}")
         print("-" * 60)
 
 

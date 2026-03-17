@@ -8,7 +8,7 @@ Usage:
     python train.py --epochs 10 --warmup-steps 500 --lr 3e-4
 """
 
-import argparse, os, time, glob
+import argparse, os, time, glob, math
 import torch
 import torch.nn as nn
 import pyarrow as pa
@@ -62,6 +62,9 @@ def get_lr(step: int, warmup_steps: int, total_steps: int, lr: float) -> float:
 def train(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+
+    if args.ctx_len != 512:
+        MODEL_CONFIG["context_length"] = args.ctx_len
 
     model = BigModel(MODEL_CONFIG).to(device=device, dtype=dtype)
     print(f"[BigModel] {model.num_params():,} params  {dtype} on {device}")
@@ -188,8 +191,15 @@ def train(args):
     peak_vram = (
         torch.cuda.max_memory_allocated() / 1024**2 if torch.cuda.is_available() else 0
     )
+    final_loss = (
+        best_loss
+        if best_loss != float("inf")
+        else (total_loss / max(steps, 1) if steps > 0 else float("inf"))
+    )
+    perplexity = math.exp(final_loss) if final_loss < 100 else float("inf")
     print("---")
-    print(f"train_loss:       {best_loss:.6f}")
+    print(f"train_loss:       {final_loss:.6f}")
+    print(f"perplexity:       {perplexity:.3f}")
     print(f"training_seconds: {training_seconds:.1f}")
     print(f"peak_vram_mb:     {peak_vram:.1f}")
 
@@ -215,7 +225,12 @@ def main():
         help="Gradient accumulation steps (effective batch = batch_size * grad_accum)",
     )
     p.add_argument("--log-every", type=int, default=1, help="Print loss every N steps")
-    p.add_argument("--save-steps", type=int, default=500, help="Save checkpoint every N optimizer steps")
+    p.add_argument(
+        "--save-steps",
+        type=int,
+        default=500,
+        help="Save checkpoint every N optimizer steps",
+    )
     p.add_argument("--save-every", type=int, default=1)
     p.add_argument("--checkpoint-dir", type=str, default="checkpoints")
     p.add_argument(
@@ -227,6 +242,9 @@ def main():
         help="Resume from checkpoint (default: checkpoints/latest.pt)",
     )
     p.add_argument("--time-limit", type=int, default=None)
+    p.add_argument(
+        "--ctx-len", type=int, default=512, help="Context length (lower = less memory)"
+    )
     args = p.parse_args()
     train(args)
 
