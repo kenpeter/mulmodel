@@ -82,7 +82,7 @@ def train(args):
     )
 
     optimizer = torch.optim.AdamW(
-        model.parameters(), lr=args.lr, betas=(0.9, 0.95), weight_decay=0.1
+        model.parameters(), lr=args.lr, betas=(0.9, 0.95), weight_decay=0.01
     )
 
     start_epoch = 0
