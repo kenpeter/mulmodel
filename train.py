@@ -210,7 +210,7 @@ def train(args):
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--epochs", type=int, default=10)
-    p.add_argument("--lr", type=float, default=3e-4)
+    p.add_argument("--lr", type=float, default=5e-4)
     p.add_argument(
         "--warmup-steps",
         type=int,
