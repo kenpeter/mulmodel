@@ -214,7 +214,7 @@ def main():
     p.add_argument(
         "--warmup-steps",
         type=int,
-        default=0,
+        default=100,
         help="Linear warmup steps before cosine decay",
     )
     p.add_argument("--batch-size", type=int, default=8)
