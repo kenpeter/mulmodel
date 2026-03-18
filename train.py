@@ -8,14 +8,24 @@ Usage:
     python train.py --epochs 10 --warmup-steps 500 --lr 3e-4
 """
 
-import argparse, os, time, glob, math
+import argparse, os, time, glob, math, re
 import torch
 import torch.nn as nn
 import pyarrow as pa
 from torch.utils.data import Dataset, DataLoader
 from transformer import BigModel, MODEL_CONFIG
 
-# ── Dataset ───────────────────────────────────────────────────────────────────
+CODE_MARKER = "\n[CODE]\n"
+
+
+def extract_code(gen: str) -> str:
+    match = re.search(r"```cpp\s*\n(.*?)```", gen, re.DOTALL)
+    if match:
+        return match.group(1).strip()
+    match = re.search(r"```\s*\n(.*?)(?:```|$)", gen, re.DOTALL)
+    if match:
+        return match.group(1).strip()
+    return ""
 
 
 class CodeforcesDataset(Dataset):
@@ -27,7 +37,10 @@ class CodeforcesDataset(Dataset):
             for i in range(len(table)):
                 desc = table["description"][i].as_py() or ""
                 gen = table["generation"][i].as_py() or ""
-                texts.append(desc + "\n" + gen)
+                code = extract_code(gen)
+                if not code:
+                    continue
+                texts.append(desc.strip() + CODE_MARKER + code)
 
         all_bytes = bytearray(b"\x00".join(t.encode("utf-8") for t in texts))
         self.data = torch.frombuffer(all_bytes, dtype=torch.uint8).long()
