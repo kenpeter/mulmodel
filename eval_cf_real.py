@@ -10,6 +10,13 @@ import tempfile
 import os
 import re
 
+try:
+    import tiktoken
+
+    HAS_TIKTOKEN = True
+except ImportError:
+    HAS_TIKTOKEN = False
+
 from transformer import BigModel, MODEL_CONFIG
 
 
@@ -74,12 +81,24 @@ Output: reversed array as space-separated integers.""",
 
 
 def generate(
-    model, prompt: str, max_tokens: int, device, dtype, temperature=0.0, top_k=10
+    model,
+    prompt: str,
+    max_tokens: int,
+    device,
+    dtype,
+    temperature=0.0,
+    top_k=10,
+    tokenizer=None,
 ):
     model.eval()
-    ids = torch.tensor(
-        list(prompt.encode("utf-8")), dtype=torch.long, device=device
-    ).unsqueeze(0)
+    if tokenizer is not None:
+        ids = torch.tensor(
+            tokenizer.encode(prompt), dtype=torch.long, device=device
+        ).unsqueeze(0)
+    else:
+        ids = torch.tensor(
+            list(prompt.encode("utf-8")), dtype=torch.long, device=device
+        ).unsqueeze(0)
     for _ in range(max_tokens):
         inp = ids[:, -MODEL_CONFIG["context_length"] :]
         with torch.autocast(device_type="cuda", dtype=dtype):
@@ -94,6 +113,8 @@ def generate(
             probs = torch.softmax(logits / temperature, dim=0)
             next_id = torch.multinomial(probs, 1).unsqueeze(0)
         ids = torch.cat([ids, next_id], dim=1)
+    if tokenizer is not None:
+        return tokenizer.decode(ids[0].tolist())
     return bytes(ids[0].tolist()).decode("utf-8", errors="replace")
 
 
@@ -175,14 +196,32 @@ def run_cpp_code(code: str, stdin: str) -> str:
 
 
 def main():
+    import argparse
+
+    p = argparse.ArgumentParser()
+    p.add_argument("--checkpoint", default="checkpoints/latest.pt")
+    p.add_argument("--ctx-len", type=int, default=256)
+    p.add_argument(
+        "--tokenizer", type=str, default="byte", choices=["byte", "tiktoken"]
+    )
+    args = p.parse_args()
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
 
-    MODEL_CONFIG["context_length"] = 256
+    MODEL_CONFIG["context_length"] = args.ctx_len
+
+    tokenizer = None
+    if args.tokenizer == "tiktoken":
+        MODEL_CONFIG["vocab_size"] = 50257
+        tokenizer = tiktoken.get_encoding("gpt2")
+        print(f"[Tokenizer] tiktoken gpt2, vocab={MODEL_CONFIG['vocab_size']}")
+    else:
+        MODEL_CONFIG["vocab_size"] = 256
 
     print("[Loading model...]")
     model = BigModel(MODEL_CONFIG).to(device=device, dtype=dtype)
-    ck = torch.load("checkpoints/latest.pt", map_location=device)
+    ck = torch.load(args.checkpoint, map_location=device)
     model.load_state_dict(ck["model"])
     print(f"[Model loaded] {model.num_params():,} params")
     print(
@@ -201,7 +240,16 @@ def main():
 
         print(f"[Prompt (first 100 chars)]\n{prompt[:100]}...\n")
 
-        output = generate(model, prompt, 600, device, dtype, temperature=0.0, top_k=0)
+        output = generate(
+            model,
+            prompt,
+            600,
+            device,
+            dtype,
+            temperature=0.0,
+            top_k=0,
+            tokenizer=tokenizer,
+        )
 
         print(f"[Model output (first 800 chars)]\n{output[:800]}...\n")
 
