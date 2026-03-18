@@ -167,8 +167,13 @@ def train(args):
 
                 if global_step % args.save_steps == 0:
                     avg = total_loss / max(steps, 1)
-                    save_checkpoint(epoch, avg, "latest")
-                    print(f"  [ckpt] step {global_step}  loss {avg:.4f}", flush=True)
+                    try:
+                        save_checkpoint(epoch, avg, "latest")
+                        print(
+                            f"  [ckpt] step {global_step}  loss {avg:.4f}", flush=True
+                        )
+                    except Exception as e:
+                        print(f"  [ERROR] checkpoint save failed: {e}", flush=True)
 
         training_seconds += time.time() - epoch_start
         if done:
@@ -228,7 +233,7 @@ def main():
     p.add_argument(
         "--save-steps",
         type=int,
-        default=500,
+        default=50,
         help="Save checkpoint every N optimizer steps",
     )
     p.add_argument("--save-every", type=int, default=1)
