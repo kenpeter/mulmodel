@@ -241,7 +241,7 @@ def main():
     p.add_argument(
         "--save-steps",
         type=int,
-        default=500,
+        default=100,
         help="Save checkpoint every N optimizer steps",
     )
     p.add_argument("--save-every", type=int, default=1)
