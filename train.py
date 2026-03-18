@@ -8,41 +8,18 @@ Usage:
     python train.py --epochs 10 --warmup-steps 500 --lr 3e-4
 """
 
-import argparse, os, time, glob, math, re
+import argparse, os, time, glob, math
 import torch
 import torch.nn as nn
 import pyarrow as pa
 from torch.utils.data import Dataset, DataLoader
 from transformer import BigModel, MODEL_CONFIG
 
-try:
-    import tiktoken
-
-    HAS_TIKTOKEN = True
-except ImportError:
-    HAS_TIKTOKEN = False
-
-CODE_MARKER = "\n[CODE]\n"
-
-
-def get_tokenizer(encoding="gpt2"):
-    if HAS_TIKTOKEN:
-        return tiktoken.get_encoding(encoding)
-    return None
-
-
-def extract_code(gen: str) -> str:
-    match = re.search(r"```cpp\s*\n(.*?)```", gen, re.DOTALL)
-    if match:
-        return match.group(1).strip()
-    match = re.search(r"```\s*\n(.*?)(?:```|$)", gen, re.DOTALL)
-    if match:
-        return match.group(1).strip()
-    return ""
+# ── Dataset ───────────────────────────────────────────────────────────────────
 
 
 class CodeforcesDataset(Dataset):
-    def __init__(self, data_dir: str, context_length: int, tokenizer=None):
+    def __init__(self, data_dir: str, context_length: int):
         arrow_files = sorted(glob.glob(f"{data_dir}/data-*.arrow"))
         texts = []
         for f in arrow_files:
@@ -50,39 +27,22 @@ class CodeforcesDataset(Dataset):
             for i in range(len(table)):
                 desc = table["description"][i].as_py() or ""
                 gen = table["generation"][i].as_py() or ""
-                code = extract_code(gen)
-                if not code:
-                    continue
-                texts.append(desc.strip() + CODE_MARKER + code)
+                texts.append(desc + "\n" + gen)
 
-        if tokenizer is not None:
-            all_ids = []
-            for t in texts:
-                ids = tokenizer.encode(t)
-                all_ids.extend(ids + [tokenizer.eot_token])
-            self.ids = torch.tensor(all_ids, dtype=torch.long)
-            self.ctx = context_length
-            self.tok = tokenizer
-            print(
-                f"[Data] {len(arrow_files)} shards, {len(texts):,} entries, "
-                f"{len(self.ids):,} tokens, {len(self):,} samples (tiktoken)"
-            )
-        else:
-            all_bytes = bytearray(b"\x00".join(t.encode("utf-8") for t in texts))
-            self.ids = torch.frombuffer(all_bytes, dtype=torch.uint8).long()
-            self.ctx = context_length
-            self.tok = None
-            print(
-                f"[Data] {len(arrow_files)} shards, {len(texts):,} entries, "
-                f"{len(self.ids) / 1e9:.2f}B tokens, {len(self):,} samples (byte)"
-            )
+        all_bytes = bytearray(b"\x00".join(t.encode("utf-8") for t in texts))
+        self.data = torch.frombuffer(all_bytes, dtype=torch.uint8).long()
+        self.ctx = context_length
+        print(
+            f"[Data] {len(arrow_files)} shards, {len(texts):,} entries, "
+            f"{len(self.data) / 1e9:.2f}B tokens, {len(self):,} samples"
+        )
 
     def __len__(self):
-        return (len(self.ids) - self.ctx) // self.ctx
+        return (len(self.data) - self.ctx) // self.ctx
 
     def __getitem__(self, i):
         start = i * self.ctx
-        chunk = self.ids[start : start + self.ctx + 1]
+        chunk = self.data[start : start + self.ctx + 1]
         return chunk[:-1], chunk[1:]
 
 
@@ -106,19 +66,11 @@ def train(args):
     if args.ctx_len != 512:
         MODEL_CONFIG["context_length"] = args.ctx_len
 
-    tokenizer = None
-    if args.tokenizer == "tiktoken":
-        MODEL_CONFIG["vocab_size"] = 50257
-        tokenizer = get_tokenizer("gpt2")
-        print(f"[Tokenizer] tiktoken gpt2, vocab={MODEL_CONFIG['vocab_size']}")
-    else:
-        MODEL_CONFIG["vocab_size"] = 256
-
     model = BigModel(MODEL_CONFIG).to(device=device, dtype=dtype)
     print(f"[BigModel] {model.num_params():,} params  {dtype} on {device}")
 
     dataset = CodeforcesDataset(
-        "data/code/codeforces_cots", MODEL_CONFIG["context_length"], tokenizer=tokenizer
+        "data/code/codeforces_cots", MODEL_CONFIG["context_length"]
     )
     loader = DataLoader(
         dataset,
@@ -276,7 +228,7 @@ def main():
     p.add_argument(
         "--save-steps",
         type=int,
-        default=100,
+        default=500,
         help="Save checkpoint every N optimizer steps",
     )
     p.add_argument("--save-every", type=int, default=1)
@@ -292,13 +244,6 @@ def main():
     p.add_argument("--time-limit", type=int, default=None)
     p.add_argument(
         "--ctx-len", type=int, default=512, help="Context length (lower = less memory)"
-    )
-    p.add_argument(
-        "--tokenizer",
-        type=str,
-        default="byte",
-        choices=["byte", "tiktoken"],
-        help="Tokenization method",
     )
     args = p.parse_args()
     train(args)
