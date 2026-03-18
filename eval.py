@@ -18,9 +18,11 @@ from train import CodeforcesDataset
 
 # ── Generation ────────────────────────────────────────────────────────────────
 
+
 @torch.no_grad()
-def generate(model, prompt: str, max_new_tokens: int, device, dtype,
-             temperature=0.8, top_k=50):
+def generate(
+    model, prompt: str, max_new_tokens: int, device, dtype, temperature=0.8, top_k=50
+):
     model.eval()
     ctx_len = MODEL_CONFIG["context_length"]
     ids = torch.tensor(list(prompt.encode("utf-8")), dtype=torch.long, device=device)
@@ -44,6 +46,7 @@ def generate(model, prompt: str, max_new_tokens: int, device, dtype,
 
 # ── Perplexity ─────────────────────────────────────────────────────────────────
 
+
 @torch.no_grad()
 def compute_perplexity(model, loader, device, dtype, max_batches=200):
     model.eval()
@@ -63,6 +66,7 @@ def compute_perplexity(model, loader, device, dtype, max_batches=200):
 
 
 # ── Chat mode ─────────────────────────────────────────────────────────────────
+
 
 def build_prompt(problem: str) -> str:
     """Wrap a problem statement in the training-data format the model learned.
@@ -100,8 +104,15 @@ def chat_loop(model, device, dtype, args):
         prompt = build_prompt(problem)
         print(f"\n[Generating up to {args.max_new_tokens} tokens...]\n")
 
-        out = generate(model, prompt, args.max_new_tokens, device, dtype,
-                       args.temperature, args.top_k)
+        out = generate(
+            model,
+            prompt,
+            args.max_new_tokens,
+            device,
+            dtype,
+            args.temperature,
+            args.top_k,
+        )
 
         print("-" * 60)
         print(problem)
@@ -111,10 +122,13 @@ def chat_loop(model, device, dtype, args):
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--checkpoint", default="checkpoints/best.pt")
-    p.add_argument("--chat", action="store_true", help="Interactive problem→solution mode")
+    p.add_argument(
+        "--chat", action="store_true", help="Interactive problem→solution mode"
+    )
     p.add_argument("--data-dir", default="data/code/codeforces_cots")
     p.add_argument("--batch-size", type=int, default=8)
     p.add_argument("--max-batches", type=int, default=200)
@@ -122,7 +136,11 @@ def main():
     p.add_argument("--max-new-tokens", type=int, default=512)
     p.add_argument("--temperature", type=float, default=0.8)
     p.add_argument("--top-k", type=int, default=50)
+    p.add_argument("--ctx-len", type=int, default=512, help="Context length")
     args = p.parse_args()
+
+    if args.ctx_len != 512:
+        MODEL_CONFIG["context_length"] = args.ctx_len
 
     if not os.path.exists(args.checkpoint):
         print(f"[Error] Checkpoint not found: {args.checkpoint}")
@@ -137,8 +155,10 @@ def main():
     ck = torch.load(args.checkpoint, map_location=device)
     model.load_state_dict(ck["model"])
     print(f"[Loaded] {args.checkpoint}")
-    print(f"  epoch={ck.get('epoch','?')}  step={ck.get('step','?')}  "
-          f"train_loss={ck.get('loss', float('nan')):.4f}")
+    print(
+        f"  epoch={ck.get('epoch', '?')}  step={ck.get('step', '?')}  "
+        f"train_loss={ck.get('loss', float('nan')):.4f}"
+    )
     print(f"  params={model.num_params():,}  dtype={dtype}  device={device}")
 
     if args.chat:
@@ -150,14 +170,20 @@ def main():
     n_val = max(1, int(len(dataset) * args.val_split))
     n_train = len(dataset) - n_val
     _, val_set = torch.utils.data.random_split(
-        dataset, [n_train, n_val],
-        generator=torch.Generator().manual_seed(42)
+        dataset, [n_train, n_val], generator=torch.Generator().manual_seed(42)
     )
-    val_loader = DataLoader(val_set, batch_size=args.batch_size, shuffle=False,
-                            num_workers=2, pin_memory=True)
+    val_loader = DataLoader(
+        val_set,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=2,
+        pin_memory=True,
+    )
 
     print(f"\n[Eval] val_samples={n_val}  max_batches={args.max_batches}")
-    avg_loss, ppl = compute_perplexity(model, val_loader, device, dtype, args.max_batches)
+    avg_loss, ppl = compute_perplexity(
+        model, val_loader, device, dtype, args.max_batches
+    )
     print(f"  val_loss={avg_loss:.4f}  perplexity={ppl:.2f}")
 
     # Quick generation samples — match exact training format: desc + "\n" (no system prompt)
@@ -183,12 +209,21 @@ Input: first line n and T, second line n integers.
 Output: YES if such a pair exists, NO otherwise.""",
         ),
     ]
-    print(f"\n[Samples] max_new_tokens={args.max_new_tokens}  temp={args.temperature}  top_k={args.top_k}")
+    print(
+        f"\n[Samples] max_new_tokens={args.max_new_tokens}  temp={args.temperature}  top_k={args.top_k}"
+    )
     for title, problem_body in problems:
         prompt = build_prompt(problem_body)
-        out = generate(model, prompt, args.max_new_tokens, device, dtype,
-                       args.temperature, args.top_k)
-        print(f"\n{'='*60}\n# {title}\n{'='*60}")
+        out = generate(
+            model,
+            prompt,
+            args.max_new_tokens,
+            device,
+            dtype,
+            args.temperature,
+            args.top_k,
+        )
+        print(f"\n{'=' * 60}\n# {title}\n{'=' * 60}")
         print(f"[Prompt]\n{prompt}")
         print(f"[Model output]\n{out}")
         print("-" * 60)
