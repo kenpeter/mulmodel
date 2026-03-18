@@ -97,24 +97,48 @@ def generate(
     return bytes(ids[0].tolist()).decode("utf-8", errors="replace")
 
 
+def postprocess_code(code: str) -> str:
+    code = code.replace("<bits/stdc+++.h>", "<iostream>")
+    code = code.replace("<bits/stdc++.h>", "<iostream>")
+    code = code.replace("<bits/stdc++11.h>", "<iostream>")
+    code = code.replace("<bits/stdc++14.h>", "<iostream>")
+    code = code.replace("<bits/stdc++17.h>", "<iostream>")
+    lines = code.split("\n")
+    result = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        if "+++" in line and "bits/stdc" not in line:
+            for _ in range(3):
+                line = line.replace("++++", "++")
+        if ">>>>" in line:
+            line = line.replace(">>>>", ">")
+        if ">>>" in line:
+            line = line.replace(">>>", ">>")
+        result.append(line)
+    return "\n".join(result)
+
+
 def extract_code(output: str) -> str:
     if "[CODE]" in output:
         code = output.split("[CODE]")[-1].strip()
         if code:
+            code = postprocess_code(code)
             return code
-    if "#include" in output or "int main" in output:
-        lines = output.split("\n")
-        for i, line in enumerate(lines):
-            if "#include" in line or "int main" in line:
-                result = []
-                for l in lines[i:]:
-                    if l.strip().startswith("[CODE]"):
-                        break
-                    result.append(l)
-                if result:
-                    return "\n".join(result).strip()
+    lines = output.split("\n")
+    for i, line in enumerate(lines):
+        if "#include" in line or "int main" in line:
+            result = []
+            for l in lines[i:]:
+                if l.strip().startswith("[CODE]"):
+                    break
+                result.append(l)
+            if result:
+                code = postprocess_code("\n".join(result).strip())
+                return code
     if output.strip():
-        return output.strip()
+        return postprocess_code(output.strip())
     return ""
 
 
