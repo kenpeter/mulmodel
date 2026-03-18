@@ -10,17 +10,7 @@ import tempfile
 import os
 import re
 
-try:
-    import tiktoken
-
-    HAS_TIKTOKEN = True
-except ImportError:
-    HAS_TIKTOKEN = False
-
 from transformer import BigModel, MODEL_CONFIG
-
-
-CODE_MARKER = "\n[CODE]\n"
 
 
 REAL_CODEFORCES_PROBLEMS = [
@@ -81,49 +71,29 @@ Output: reversed array as space-separated integers.""",
 
 
 def generate(
-    model,
-    prompt: str,
-    max_tokens: int,
-    device,
-    dtype,
-    temperature=0.0,
-    top_k=10,
-    tokenizer=None,
+    model, prompt: str, max_tokens: int, device, dtype, temperature=0.8, top_k=50
 ):
     model.eval()
-    if tokenizer is not None:
-        ids = torch.tensor(
-            tokenizer.encode(prompt), dtype=torch.long, device=device
-        ).unsqueeze(0)
-    else:
-        ids = torch.tensor(
-            list(prompt.encode("utf-8")), dtype=torch.long, device=device
-        ).unsqueeze(0)
+    ids = torch.tensor(
+        list(prompt.encode("utf-8")), dtype=torch.long, device=device
+    ).unsqueeze(0)
     for _ in range(max_tokens):
         inp = ids[:, -MODEL_CONFIG["context_length"] :]
         with torch.autocast(device_type="cuda", dtype=dtype):
             logits = model(inp)
-        logits = logits[0, -1, :]
-        if temperature == 0.0:
-            next_id = logits.argmax().unsqueeze(0).unsqueeze(0)
-        else:
-            if top_k > 0:
-                v, _ = torch.topk(logits, top_k)
-                logits[logits < v[-1]] = float("-inf")
-            probs = torch.softmax(logits / temperature, dim=0)
-            next_id = torch.multinomial(probs, 1).unsqueeze(0)
+        logits = logits[0, -1, :] / temperature
+        if top_k > 0:
+            v, _ = torch.topk(logits, top_k)
+            logits[logits < v[-1]] = float("-inf")
+        probs = torch.softmax(logits, dim=0)
+        next_id = torch.multinomial(probs, 1).unsqueeze(0)
         ids = torch.cat([ids, next_id], dim=1)
-    if tokenizer is not None:
-        return tokenizer.decode(ids[0].tolist())
     return bytes(ids[0].tolist()).decode("utf-8", errors="replace")
 
 
 def postprocess_code(code: str) -> str:
     code = code.replace("<bits/stdc+++.h>", "<iostream>")
     code = code.replace("<bits/stdc++.h>", "<iostream>")
-    code = code.replace("<bits/stdc++11.h>", "<iostream>")
-    code = code.replace("<bits/stdc++14.h>", "<iostream>")
-    code = code.replace("<bits/stdc++17.h>", "<iostream>")
     lines = code.split("\n")
     result = []
     for line in lines:
@@ -142,24 +112,16 @@ def postprocess_code(code: str) -> str:
 
 
 def extract_code(output: str) -> str:
-    if "[CODE]" in output:
-        code = output.split("[CODE]")[-1].strip()
-        if code:
-            code = postprocess_code(code)
-            return code
-    lines = output.split("\n")
-    for i, line in enumerate(lines):
-        if "#include" in line or "int main" in line:
-            result = []
-            for l in lines[i:]:
-                if l.strip().startswith("[CODE]"):
-                    break
-                result.append(l)
-            if result:
-                code = postprocess_code("\n".join(result).strip())
-                return code
-    if output.strip():
-        return postprocess_code(output.strip())
+    match = re.search(r"```cpp\s*\n(.*?)```", output, re.DOTALL)
+    if match:
+        code = match.group(1).strip()
+        code = postprocess_code(code)
+        return code
+    match = re.search(r"```\s*\n(.*?)(?:```|$)", output, re.DOTALL)
+    if match:
+        code = match.group(1).strip()
+        code = postprocess_code(code)
+        return code
     return ""
 
 
@@ -200,24 +162,13 @@ def main():
 
     p = argparse.ArgumentParser()
     p.add_argument("--checkpoint", default="checkpoints/latest.pt")
-    p.add_argument("--ctx-len", type=int, default=256)
-    p.add_argument(
-        "--tokenizer", type=str, default="byte", choices=["byte", "tiktoken"]
-    )
+    p.add_argument("--ctx-len", type=int, default=512)
     args = p.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
 
     MODEL_CONFIG["context_length"] = args.ctx_len
-
-    tokenizer = None
-    if args.tokenizer == "tiktoken":
-        MODEL_CONFIG["vocab_size"] = 50257
-        tokenizer = tiktoken.get_encoding("gpt2")
-        print(f"[Tokenizer] tiktoken gpt2, vocab={MODEL_CONFIG['vocab_size']}")
-    else:
-        MODEL_CONFIG["vocab_size"] = 256
 
     print("[Loading model...]")
     model = BigModel(MODEL_CONFIG).to(device=device, dtype=dtype)
@@ -236,20 +187,11 @@ def main():
         print(f"# {problem['name']}")
         print(f"{'=' * 60}")
 
-        prompt = problem["description"].strip() + CODE_MARKER
+        prompt = problem["description"].strip() + "\n"
 
         print(f"[Prompt (first 100 chars)]\n{prompt[:100]}...\n")
 
-        output = generate(
-            model,
-            prompt,
-            600,
-            device,
-            dtype,
-            temperature=0.0,
-            top_k=0,
-            tokenizer=tokenizer,
-        )
+        output = generate(model, prompt, 500, device, dtype, temperature=0.8, top_k=50)
 
         print(f"[Model output (first 800 chars)]\n{output[:800]}...\n")
 
