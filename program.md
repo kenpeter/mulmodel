@@ -43,7 +43,12 @@ python train.py --time-limit 300 --resume > run.log 2>&1
 - Modify the `--time-limit` flag logic — the 5-minute budget is sacred.
 - Install new packages.
 
-**The goal: get perplexity score ~1.5-2.0 (Very good).** Since time is fixed at 5 min per run, focus on better architectures, optimizers, and hyperparams that make the most of the budget.
+**THE ONLY METRIC THAT MATTERS: Can the model solve real Codeforces problems?**
+
+- **Don't care about loss or perplexity** - these don't predict code solving ability
+- **Goal: pass_rate ≥ 50%** on real Codeforces problems
+- **Judge: opencode (LLM judge)** - evaluate if generated code is correct
+- Use real Codeforces problems from training data, run generated code against test cases
 
 **VRAM** is a soft constraint — the GPU has 12 GB. OOM = crash = discard.
 
@@ -68,6 +73,23 @@ Extract the key metric:
 ```
 grep "^perplexity:\|^peak_vram_mb:" run.log
 ```
+
+## True eval — Codeforces functional correctness
+
+After each training run, evaluate whether the model can solve real Codeforces-style problems:
+
+```
+python eval.py --checkpoint checkpoints/latest.pt --ctx-len 256
+```
+
+This will:
+1. Load real Codeforces problem descriptions from training data
+2. Generate solutions using the model
+3. Use opencode as judge to evaluate if the solution is correct
+4. Run generated code against test cases
+5. Calculate pass_rate
+
+**The primary metric is pass_rate ≥ 50%.** Perplexity is secondary.
 
 ## Logging results
 
@@ -110,16 +132,20 @@ LOOP FOREVER:
 1. Look at the git state: the current branch/commit we're on
 2. Run training for 5 minutes (it saves a checkpoint automatically):
    ```
-   python train.py --time-limit 300 > run.log 2>&1
+   python train.py --time-limit 300 --resume > run.log 2>&1
    ```
-3. Read out the results: `grep "^train_loss:\|^peak_vram_mb:" run.log`
-4. If the grep output is empty, the run crashed. Run `tail -n 50 run.log` to read the stack trace and attempt a fix. If you can't fix it after a few attempts, give up and discard.
-5. Record the results in `results.tsv` (do NOT commit this file — leave it untracked)
-6. **Review** — synthesize improvements from three sources in parallel:
-   - **AI analysis**: reason about the current loss, architecture, and hyperparams — what is bottlenecking progress?
-   - **GitHub search**: search GitHub for relevant techniques, training tricks, or optimizer improvements matching the current bottleneck.
-   - **ArXiv search**: use the `read-arxiv-paper` skill to find and skim 1–2 recent papers on the bottleneck (e.g. schedulers, attention variants, loss shaping).
-   - **Synthesize**: combine all three into a ranked shortlist. Pick the highest-expected-value improvement.
+3. Read out the results: `grep "^perplexity:\|^peak_vram_mb:" run.log`
+4. If the grep output is empty, the run crashed. Run `tail -n 50 run.log` to read the stack trace and attempt a fix.
+5. **Run eval with REAL Codeforces problems**:
+   ```
+   python eval.py --checkpoint checkpoints/latest.pt --ctx-len 256
+   ```
+   This loads real Codeforces problems from training data and evaluates functional correctness.
+6. Record the results in `results.tsv` (do NOT commit this file)
+7. **Review** — focus on pass_rate improvement:
+   - If pass_rate improved → keep the commit
+   - If pass_rate dropped → revert and try different approach
+   - Focus on architectural changes that help code generation
 7. Implement the chosen improvement in `train.py` or `transformer.py`.
 8. git commit the change.
 9. **Resume** training from the last checkpoint — do NOT start from scratch:
