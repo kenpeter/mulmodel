@@ -131,12 +131,30 @@ def postprocess_code(code: str) -> str:
         line = line.replace(")  >", ")>")
         line = line.replace(", ,", ",")
         line = line.replace(",  ,", ",")
+        # Fix typedef long ll = long -> typedef long long ll
+        line = line.replace("typedef long ll = long", "typedef long long ll")
+        # Fix long long long -> long long
+        while "long long long" in line:
+            line = line.replace("long long long", "long long")
+        # Fix vector<pair<int, int>>, int>> -> vector<pair<int, int>>
+        line = line.replace(">>, int>>", ">>")
+        # Fix duplicate variable declarations (same line repeated)
         result.append(line)
     code = "\n".join(result)
+    # Remove duplicate consecutive lines
+    deduped = []
+    for line in code.split("\n"):
+        if not deduped or line.strip() != deduped[-1].strip():
+            deduped.append(line)
+    code = "\n".join(deduped)
     return code
 
 
 def extract_code(output: str) -> str:
+    # Truncate at <|endoftext|> to avoid training data contamination
+    if "<|endoftext|>" in output:
+        output = output.split("<|endoftext|>")[0]
+
     code_after_marker = None
     if "[CODE]" in output:
         parts = output.split("[CODE]", 1)
