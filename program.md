@@ -2,6 +2,29 @@
 
 This is an experiment to have the LLM do its own research on the mulmodel project.
 
+## How to Run
+
+### Code Agent (kilocode / opcode)
+
+If you're running this in a code agent (like kilocode or opcode code), **do NOT use start.sh**. Run directly:
+
+```
+kilocode run "read program.md auto research"
+```
+
+Or in continuous mode:
+```
+kilocode run "read program.md auto research"
+```
+(Repeat as needed)
+
+### Phone / Openclaw
+
+If running from phone via openclaw, use `start.sh`:
+```
+./start.sh
+```
+
 ## Setup
 
 To set up a new experiment, work with the user to:
