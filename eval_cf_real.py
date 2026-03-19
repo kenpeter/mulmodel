@@ -71,12 +71,24 @@ Output: reversed array as space-separated integers.""",
 
 
 def generate(
-    model, prompt: str, max_tokens: int, device, dtype, temperature=0.8, top_k=50
+    model,
+    prompt: str,
+    max_tokens: int,
+    device,
+    dtype,
+    temperature=0.8,
+    top_k=50,
+    tokenizer=None,
 ):
     model.eval()
-    ids = torch.tensor(
-        list(prompt.encode("utf-8")), dtype=torch.long, device=device
-    ).unsqueeze(0)
+    if tokenizer is not None:
+        ids = torch.tensor(
+            tokenizer.encode(prompt), dtype=torch.long, device=device
+        ).unsqueeze(0)
+    else:
+        ids = torch.tensor(
+            list(prompt.encode("utf-8")), dtype=torch.long, device=device
+        ).unsqueeze(0)
     for _ in range(max_tokens):
         inp = ids[:, -MODEL_CONFIG["context_length"] :]
         with torch.autocast(device_type="cuda", dtype=dtype):
@@ -88,6 +100,8 @@ def generate(
         probs = torch.softmax(logits, dim=0)
         next_id = torch.multinomial(probs, 1).unsqueeze(0)
         ids = torch.cat([ids, next_id], dim=1)
+    if tokenizer is not None:
+        return tokenizer.decode(ids[0].tolist())
     return bytes(ids[0].tolist()).decode("utf-8", errors="replace")
 
 
@@ -162,11 +176,24 @@ def main():
 
     p = argparse.ArgumentParser()
     p.add_argument("--checkpoint", default="checkpoints/latest.pt")
-    p.add_argument("--ctx-len", type=int, default=512)
+    p.add_argument("--ctx-len", type=int, default=256)
+    p.add_argument(
+        "--tokenizer", type=str, default="byte", choices=["byte", "tiktoken"]
+    )
     args = p.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+
+    tokenizer = None
+    if args.tokenizer == "tiktoken":
+        import tiktoken
+
+        MODEL_CONFIG["vocab_size"] = 50257
+        tokenizer = tiktoken.get_encoding("gpt2")
+        print(f"[Tokenizer] tiktoken gpt2, vocab={MODEL_CONFIG['vocab_size']}")
+    else:
+        MODEL_CONFIG["vocab_size"] = 256
 
     MODEL_CONFIG["context_length"] = args.ctx_len
 
@@ -187,11 +214,24 @@ def main():
         print(f"# {problem['name']}")
         print(f"{'=' * 60}")
 
-        prompt = problem["description"].strip() + "\n"
+        prompt = (
+            problem["description"].strip() + "\n[CODE]\n"
+            if tokenizer is not None
+            else problem["description"].strip() + "\n"
+        )
 
         print(f"[Prompt (first 100 chars)]\n{prompt[:100]}...\n")
 
-        output = generate(model, prompt, 500, device, dtype, temperature=0.8, top_k=50)
+        output = generate(
+            model,
+            prompt,
+            500,
+            device,
+            dtype,
+            temperature=0.8,
+            top_k=50,
+            tokenizer=tokenizer,
+        )
 
         print(f"[Model output (first 800 chars)]\n{output[:800]}...\n")
 
