@@ -114,15 +114,26 @@ def postprocess_code(code: str) -> str:
         line = line.strip()
         if not line:
             continue
-        if "+++" in line and "bits/stdc" not in line:
-            for _ in range(3):
-                line = line.replace("++++", "++")
-        if ">>>>" in line:
+        for _ in range(3):
+            line = line.replace("++++", "++")
+        for _ in range(2):
             line = line.replace(">>>>", ">")
-        if ">>>" in line:
+        for _ in range(2):
             line = line.replace(">>>", ">>")
+        line = line.replace("> >", ">")
+        line = line.replace(">  >", ">")
+        line = line.replace("> > >", ">")
+        line = line.replace("int  >", "int>")
+        line = line.replace("int >", "int>")
+        line = line.replace("< int", "<int")
+        line = line.replace("<  int", "<int")
+        line = line.replace(") >", ")>")
+        line = line.replace(")  >", ")>")
+        line = line.replace(", ,", ",")
+        line = line.replace(",  ,", ",")
         result.append(line)
-    return "\n".join(result)
+    code = "\n".join(result)
+    return code
 
 
 def extract_code(output: str) -> str:
