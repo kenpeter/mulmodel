@@ -1,10 +1,20 @@
 # mulmodel autoresearch
 
-**GOAL: Solve real Codeforces problems. pass_rate ≥ 50%.**
+**GOAL: Solve real LeetCode problems. pass_rate ≥ 50%.**
 
 **RULE: Keep it simple, clean, small.** If a change adds complexity without improving pass_rate, don't do it. Smaller model, simpler code, fewer tricks — always prefer the lightweight approach.
 
 This is an experiment to have the LLM do its own research on the mulmodel project.
+
+## Dataset: newfacade/LeetCodeDataset
+
+Training uses the [LeetCodeDataset](https://huggingface.co/datasets/newfacade/LeetCodeDataset) (arXiv:2504.14655):
+- 2,869 Python LeetCode problems with rich metadata (difficulty, tags, release dates)
+- 100+ test cases per problem
+- Temporal split: pre-July 2024 = train, post-July 2024 = test
+- Data format: JSONL with `query`, `response`, `completion`, `test`, `starter_code`, `problem_description`
+
+Located at: `data/newfacade_LeetCodeDataset/leetcode_train.jsonl`
 
 ## How to Run
 
@@ -40,7 +50,7 @@ To set up a new experiment, work with the user to:
    - `README.md` — repository context.
    - `train.py` — training loop, optimizer, hyperparameters, data loading.
    - `transformer.py` — model architecture (`MODEL_CONFIG`, `BigModel`, attention, blocks).
-4. **Verify data exists**: Check that `data/` contains training data. If empty, tell the human.
+4. **Verify data exists**: Check that `data/newfacade_LeetCodeDataset/` contains `leetcode_train.jsonl`. If empty, tell the human.
 5. **Initialize results.tsv**: Create `results.tsv` with just the header row. The baseline will be recorded after the first run.
 6. **Confirm and go**: Confirm setup looks good.
 
@@ -70,12 +80,12 @@ python train.py --time-limit 300 --resume > run.log 2>&1
 - Modify the `--time-limit` flag logic — the 5-minute budget is sacred.
 - Install new packages.
 
-**THE ONLY METRIC THAT MATTERS: Can the model solve real Codeforces problems?**
+**THE ONLY METRIC THAT MATTERS: Can the model solve real LeetCode problems?**
 
 - **Don't care about loss or perplexity** - these don't predict code solving ability
-- **Goal: pass_rate ≥ 50%** on real Codeforces problems
-- **Judge: g++ + test cases** - compile code, run against inputs, check outputs
-- Use real Codeforces problems, run generated code against test cases
+- **Goal: pass_rate ≥ 50%** on real LeetCode problems
+- **Judge: Python execution + test cases** - run code against inputs, check outputs
+- Use real LeetCode problems from the test set (post-July 2024)
 
 **VRAM** is a soft constraint — the GPU has 12 GB. OOM = crash = discard.
 
@@ -101,30 +111,29 @@ Extract the key metric:
 grep "^perplexity:\|^peak_vram_mb:" run.log
 ```
 
-## True eval — Codeforces functional correctness
+## True eval — LeetCode functional correctness
 
-After each training run, evaluate whether the model can solve real Codeforces-style problems:
+After each training run, evaluate whether the model can solve real LeetCode problems:
 
 ```
-python eval_cf_real.py --checkpoint checkpoints/latest.pt --ctx-len 384 --tokenizer tiktoken
+python eval_leetcode.py --checkpoint checkpoints/latest.pt --ctx-len 512 --tokenizer tiktoken
 ```
 
 For byte-level models:
 ```
-python eval_cf_real.py --checkpoint checkpoints/latest.pt --ctx-len 384 --tokenizer byte
+python eval_leetcode.py --checkpoint checkpoints/latest.pt --ctx-len 512 --tokenizer byte
 ```
 
 This will:
-1. Load 4 hardcoded Codeforces problems (Max Element, Two Sum, Palindrome, Reverse Array)
-2. Generate C++ solutions using the model
-3. Extract code from output (handles `[CODE]` marker, ```cpp blocks, raw code)
-4. Postprocess code (fix tiktoken spacing, `++++` → `++`, etc.)
-5. Compile with g++ and run against test cases
-6. Calculate pass_rate = passed_tests / total_tests
+1. Load problems from `data/newfacade_LeetCodeDataset/leetcode_test.jsonl`
+2. Generate Python solutions using the model
+3. Extract code from output (handles ```python blocks, [CODE] marker)
+4. Run the solution against the test harness
+5. Calculate pass_rate = passed_tests / total_tests
 
 **The primary metric is pass_rate ≥ 50%.** Perplexity is secondary.
 
-**Judge: g++ compilation + test case execution.** If the code compiles and produces correct output, it passes. No LLM judge.
+**Judge: Python execution + test case verification.** If the code runs and produces correct output, it passes. No LLM judge.
 
 ## Logging results
 
@@ -166,11 +175,11 @@ LOOP FOREVER:
    ```
 3. Read out the results: `grep "^perplexity:\|^peak_vram_mb:" run.log`
 4. If the grep output is empty, the run crashed. Run `tail -n 50 run.log` to read the stack trace and attempt a fix.
-5. **Run eval with REAL Codeforces problems**:
+5. **Run eval with REAL LeetCode problems**:
    ```
-   python eval_cf_real.py --checkpoint checkpoints/latest.pt --ctx-len 384 --tokenizer tiktoken
+   python eval_leetcode.py --checkpoint checkpoints/latest.pt --ctx-len 512 --tokenizer tiktoken
    ```
-   This compiles generated C++ with g++ and runs against test cases. Reports pass_rate.
+   This runs generated Python against test cases. Reports pass_rate.
 6. Record the results in `results.tsv` (do NOT commit this file)
 7. **Review** — focus on pass_rate improvement:
    - If pass_rate improved → keep the commit

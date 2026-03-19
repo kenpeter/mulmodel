@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Train BigModel on codeforces_cots using byte-level tokenizer + SageAttention.
+Train BigModel on LeetCodeDataset using byte-level tokenizer + SageAttention.
 
 Usage:
     python train.py --epochs 10
@@ -9,10 +9,9 @@ Usage:
     python train.py --tokenizer tiktoken --ctx-len 256  # BPE tokenizer mode
 """
 
-import argparse, os, time, glob, math, re
+import argparse, os, time, glob, math, re, json
 import torch
 import torch.nn as nn
-import pyarrow as pa
 from torch.utils.data import Dataset, DataLoader
 from transformer import BigModel, MODEL_CONFIG
 
@@ -33,7 +32,7 @@ def get_tokenizer(encoding="gpt2"):
 
 
 def extract_code(gen: str) -> str:
-    match = re.search(r"```cpp\s*\n(.*?)```", gen, re.DOTALL)
+    match = re.search(r"```python\s*\n(.*?)```", gen, re.DOTALL)
     if match:
         return match.group(1).strip()
     match = re.search(r"```\s*\n(.*?)(?:```|$)", gen, re.DOTALL)
@@ -42,28 +41,31 @@ def extract_code(gen: str) -> str:
     return ""
 
 
-class CodeforcesDataset(Dataset):
+class LeetCodeDataset(Dataset):
     def __init__(
         self,
         data_dir: str,
         context_length: int,
         code_first: bool = False,
         tokenizer=None,
+        split: str = "train",
     ):
-        arrow_files = sorted(glob.glob(f"{data_dir}/data-*.arrow"))
+        jsonl_file = os.path.join(data_dir, f"leetcode_{split}.jsonl")
         texts = []
-        for f in arrow_files:
-            table = pa.ipc.open_stream(f).read_all()
-            for i in range(len(table)):
-                desc = table["description"][i].as_py() or ""
-                gen = table["generation"][i].as_py() or ""
+        with open(jsonl_file, "r") as f:
+            for line in f:
+                item = json.loads(line)
+                desc = item.get("query", "") or item.get("problem_description", "")
+                resp = item.get("response", "") or item.get("completion", "")
                 if code_first:
-                    code = extract_code(gen)
+                    code = extract_code(resp)
+                    if not code:
+                        code = item.get("completion", "")
                     if not code:
                         continue
                     texts.append(desc.strip() + CODE_MARKER + code)
                 else:
-                    texts.append(desc + "\n" + gen)
+                    texts.append(desc + "\n" + resp)
 
         self.ctx = context_length
         self.tok = tokenizer
@@ -132,11 +134,12 @@ def train(args):
     model = BigModel(MODEL_CONFIG).to(device=device, dtype=dtype)
     print(f"[BigModel] {model.num_params():,} params  {dtype} on {device}")
 
-    dataset = CodeforcesDataset(
-        "data/code/codeforces_cots",
+    dataset = LeetCodeDataset(
+        "data/newfacade_LeetCodeDataset",
         MODEL_CONFIG["context_length"],
         code_first=code_first,
         tokenizer=tokenizer,
+        split="train",
     )
     loader = DataLoader(
         dataset,
