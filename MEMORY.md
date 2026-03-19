@@ -46,7 +46,7 @@ python eval_cf_real.py --tokenizer tiktoken --ctx-len 384
 ### Files
 - `train.py` — supports `--format auto|cot|code` and `--tokenizer byte|tiktoken`
 - `eval_cf_real.py` — active eval script with postprocessing
-- `start.py` — uses kilocode (NOT opencode)
+- `start.py` — uses opencode
 - `checkpoints/` — model checkpoints
 
 ### Lessons Learned

@@ -4,17 +4,17 @@ This is an experiment to have the LLM do its own research on the mulmodel projec
 
 ## How to Run
 
-### Code Agent (kilocode / opcode)
+### Code Agent (opencode)
 
-If you're running this in a code agent (like kilocode or opcode code), **do NOT use start.sh**. Run directly:
+If you're running this in a code agent (like opencode), **do NOT use start.sh**. Run directly:
 
 ```
-kilocode run "read program.md auto research"
+opencode run "read program.md auto research"
 ```
 
 Or in continuous mode:
 ```
-kilocode run "read program.md auto research"
+opencode run "read program.md auto research"
 ```
 (Repeat as needed)
 
@@ -70,8 +70,8 @@ python train.py --time-limit 300 --resume > run.log 2>&1
 
 - **Don't care about loss or perplexity** - these don't predict code solving ability
 - **Goal: pass_rate ≥ 50%** on real Codeforces problems
-- **Judge: opencode (LLM judge)** - evaluate if generated code is correct
-- Use real Codeforces problems from training data, run generated code against test cases
+- **Judge: g++ + test cases** - compile code, run against inputs, check outputs
+- Use real Codeforces problems, run generated code against test cases
 
 **VRAM** is a soft constraint — the GPU has 12 GB. OOM = crash = discard.
 
@@ -102,48 +102,51 @@ grep "^perplexity:\|^peak_vram_mb:" run.log
 After each training run, evaluate whether the model can solve real Codeforces-style problems:
 
 ```
-python eval.py --checkpoint checkpoints/latest.pt --ctx-len 256
+python eval_cf_real.py --checkpoint checkpoints/latest.pt --ctx-len 384 --tokenizer tiktoken
+```
+
+For byte-level models:
+```
+python eval_cf_real.py --checkpoint checkpoints/latest.pt --ctx-len 384 --tokenizer byte
 ```
 
 This will:
-1. Load real Codeforces problem descriptions from training data
-2. Generate solutions using the model
-3. Use opencode as judge to evaluate if the solution is correct
-4. Run generated code against test cases
-5. Calculate pass_rate
+1. Load 4 hardcoded Codeforces problems (Max Element, Two Sum, Palindrome, Reverse Array)
+2. Generate C++ solutions using the model
+3. Extract code from output (handles `[CODE]` marker, ```cpp blocks, raw code)
+4. Postprocess code (fix tiktoken spacing, `++++` → `++`, etc.)
+5. Compile with g++ and run against test cases
+6. Calculate pass_rate = passed_tests / total_tests
 
 **The primary metric is pass_rate ≥ 50%.** Perplexity is secondary.
+
+**Judge: g++ compilation + test case execution.** If the code compiles and produces correct output, it passes. No LLM judge.
 
 ## Logging results
 
 When an experiment is done, log it to `results.tsv` (tab-separated, NOT comma-separated).
 
-The TSV has a header row and 5 columns:
+The TSV has a header row and 6 columns:
 
 ```
-commit	perplexity	memory_gb	status	description
+commit	perplexity	pass_rate	memory_gb	status	description
 ```
 
 1. git commit hash (short, 7 chars)
 2. perplexity achieved (e.g. 2.324) — use 0.000 for crashes
-3. peak memory in GB, round to .1f (e.g. 8.6 — divide peak_vram_mb by 1024) — use 0.0 for crashes
-4. status: `keep`, `discard`, or `crash`
-5. short text description of what this experiment tried
+3. pass_rate as percentage (e.g. 80.0 for 4/5 tests passed) — use 0.00 for crashes
+4. peak memory in GB, round to .1f (e.g. 8.6 — divide peak_vram_mb by 1024) — use 0.0 for crashes
+5. status: `keep`, `discard`, or `crash`
+6. short text description of what this experiment tried
 
 Example:
 
 ```
-commit	perplexity	memory_gb	status	description
-a1b2c3d	4.782	8.4	keep	baseline
-b2c3d4e	3.890	8.6	keep	increase LR to 1e-4
-c3d4e5f	4.920	8.4	discard	switch to GeLU activation
-d4e5f6g	0.000	0.0	crash	double model width (OOM)
-```
-commit	train_loss	memory_gb	status	description
-a1b2c3d	1.560000	8.4	keep	baseline
-b2c3d4e	1.480000	8.6	keep	increase LR to 1e-4
-c3d4e5f	1.590000	8.4	discard	switch to GeLU activation
-d4e5f6g	0.000000	0.0	crash	double model width (OOM)
+commit	perplexity	pass_rate	memory_gb	status	description
+a1b2c3d	4.782	0.00	8.4	keep	baseline
+b2c3d4e	3.890	25.00	8.6	keep	increase LR to 1e-4
+c3d4e5f	4.920	0.00	8.4	discard	switch to GeLU activation
+d4e5f6g	0.000	0.00	0.0	crash	double model width (OOM)
 ```
 
 ## The experiment loop
@@ -161,9 +164,9 @@ LOOP FOREVER:
 4. If the grep output is empty, the run crashed. Run `tail -n 50 run.log` to read the stack trace and attempt a fix.
 5. **Run eval with REAL Codeforces problems**:
    ```
-   python eval.py --checkpoint checkpoints/latest.pt --ctx-len 256
+   python eval_cf_real.py --checkpoint checkpoints/latest.pt --ctx-len 384 --tokenizer tiktoken
    ```
-   This loads real Codeforces problems from training data and evaluates functional correctness.
+   This compiles generated C++ with g++ and runs against test cases. Reports pass_rate.
 6. Record the results in `results.tsv` (do NOT commit this file)
 7. **Review** — focus on pass_rate improvement:
    - If pass_rate improved → keep the commit
