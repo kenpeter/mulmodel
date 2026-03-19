@@ -19,7 +19,7 @@
 #   - Use --serve for persistent server (prevents disconnection)
 #   - Use --continuous to auto-recover from crashes
 #   - Each run is independent — no state leaks between calls
-#   - If "unable to connect": try 'opencode auth login' first
+#   - If "unable to connect": try 'kilocode auth login' first
 
 set -e
 

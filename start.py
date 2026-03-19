@@ -11,14 +11,14 @@ Usage:
 
     python start.py --serve      # use persistent server mode (recommended for stability)
 
-The script uses 'opencode run' to execute the auto-research loop.
+The script uses 'kilocode run' to execute the auto-research loop.
 It reads program.md and issues the autoresearch command.
 
 Connection stability tips:
 - Use --serve for a persistent server (recommended for long sessions)
-- Use --continuous to auto-restart if opencode crashes/disconnects
-- Each 'opencode run' call is independent; no shared state between calls
-- If you get connection errors, try: opencode auth login
+- Use --continuous to auto-restart if kilocode crashes/disconnects
+- Each 'kilocode run' call is independent; no shared state between calls
+- If you get connection errors, try: kilocode auth login
 """
 
 import subprocess
@@ -29,7 +29,7 @@ import time
 import json
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-CONFIG_FILE = os.path.join(SCRIPT_DIR, ".opencode_config.json")
+CONFIG_FILE = os.path.join(SCRIPT_DIR, ".kilocode_config.json")
 
 AUTORESEARCH_MSG = """read program.md auto research"""
 
@@ -48,67 +48,63 @@ def save_config(cfg):
         json.dump(cfg, f, indent=2)
 
 
-def run_opencode_run(message: str, timeout: int = 600, retries: int = 3) -> int:
-    """Run opencode with a message. Returns exit code."""
+def run_kilocode_run(message: str, timeout: int = 600, retries: int = 3) -> int:
+    """Run kilocode with a message. Returns exit code."""
     for attempt in range(retries):
         try:
             result = subprocess.run(
-                ["opencode", "run", message],
+                ["kilocode", "run", message],
                 cwd=SCRIPT_DIR,
                 timeout=timeout,
             )
             return result.returncode
         except subprocess.TimeoutExpired:
-            print(f"[start.py] opencode timed out (attempt {attempt + 1}/{retries})")
+            print(f"[start.py] kilocode timed out (attempt {attempt + 1}/{retries})")
             if attempt < retries - 1:
                 time.sleep(5)
         except FileNotFoundError:
             print(
-                "[start.py] ERROR: 'opencode' command not found. Is opencode installed?"
+                "[start.py] ERROR: 'kilocode' command not found. Is kilocode installed?"
             )
             return 1
         except Exception as e:
-            print(f"[start.py] opencode error: {e}")
+            print(f"[start.py] kilocode error: {e}")
             if attempt < retries - 1:
                 time.sleep(5)
     print("[start.py] All retries failed.")
     return 1
 
 
-def run_opencode_serve(message: str, timeout: int = 600, retries: int = 3) -> int:
+def run_kilocode_serve(message: str, timeout: int = 600, retries: int = 3) -> int:
     """Start server, send message, return exit code. More stable for long sessions."""
     server_proc = None
-    attach_url = None
     for attempt in range(retries):
         try:
-            # Start server in background
             server_proc = subprocess.Popen(
-                ["opencode", "serve"],
+                ["kilocode", "serve"],
                 cwd=SCRIPT_DIR,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             )
-            # Wait for server to start (it prints a URL)
             time.sleep(8)
 
-            # Try to attach and run
             result = subprocess.run(
-                ["opencode", "run", message],
+                ["kilocode", "run", message],
                 cwd=SCRIPT_DIR,
                 timeout=timeout,
             )
             return result.returncode
         except subprocess.TimeoutExpired:
             print(
-                f"[start.py] opencode serve timed out (attempt {attempt + 1}/{retries})"
+                f"[start.py] kilocode serve timed out (attempt {attempt + 1}/{retries})"
             )
             if attempt < retries - 1:
                 time.sleep(5)
         except FileNotFoundError:
-            print("[start.py] ERROR: 'opencode' command not found.")
+            print("[start.py] ERROR: 'kilocode' command not found.")
             return 1
         except Exception as e:
-            print(f"[start.py] opencode serve error: {e}")
+            print(f"[start.py] kilocode serve error: {e}")
             if attempt < retries - 1:
                 time.sleep(5)
         finally:
@@ -126,7 +122,7 @@ def main():
         "--timeout",
         type=int,
         default=DEFAULT_TIMEOUT,
-        help=f"Timeout for opencode run (default {DEFAULT_TIMEOUT}s)",
+        help=f"Timeout for kilocode run (default {DEFAULT_TIMEOUT}s)",
     )
     p.add_argument(
         "--continuous",
@@ -141,7 +137,7 @@ def main():
     args = p.parse_args()
 
     mode = "inspect" if args.inspect else "auto"
-    runner = run_opencode_serve if args.serve else run_opencode_run
+    runner = run_kilocode_serve if args.serve else run_kilocode_run
 
     if args.continuous:
         print("[start.py] Continuous mode: will auto-restart on failure")
@@ -153,7 +149,7 @@ def main():
             ret = runner(AUTORESEARCH_MSG, timeout=args.timeout)
             failures += 1
             if ret == 0:
-                print(f"[start.py] Opencode finished successfully (cycle #{failures}).")
+                print(f"[start.py] kilocode finished successfully (cycle #{failures}).")
                 break
             print(
                 f"[start.py] Cycle #{failures} failed (exit {ret}), restart in 15s..."
