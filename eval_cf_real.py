@@ -106,13 +106,16 @@ def generate(
 
 
 def postprocess_code(code: str) -> str:
-    code = code.replace("<bits/stdc+++.h>", "<iostream>")
-    code = code.replace("<bits/stdc++.h>", "<iostream>")
+    # Keep <bits/stdc++.h> — it works and includes everything
+    # Only fix the corrupted version with extra + signs
+    code = code.replace("<bits/stdc+++.h>", "<bits/stdc++.h>")
+    code = code.replace("<bits/stdc++++.h>", "<bits/stdc++.h>")
     lines = code.split("\n")
     result = []
     for line in lines:
         line = line.strip()
         if not line:
+            result.append("")
             continue
         for _ in range(3):
             line = line.replace("++++", "++")
@@ -138,14 +141,15 @@ def postprocess_code(code: str) -> str:
             line = line.replace("long long long", "long long")
         # Fix vector<pair<int, int>>, int>> -> vector<pair<int, int>>
         line = line.replace(">>, int>>", ">>")
-        # Fix duplicate variable declarations (same line repeated)
         result.append(line)
     code = "\n".join(result)
-    # Remove duplicate consecutive lines
+    # Remove duplicate consecutive non-empty lines
     deduped = []
     for line in code.split("\n"):
-        if not deduped or line.strip() != deduped[-1].strip():
-            deduped.append(line)
+        stripped = line.strip()
+        if stripped and deduped and stripped == deduped[-1].strip():
+            continue
+        deduped.append(line)
     code = "\n".join(deduped)
     return code
 
