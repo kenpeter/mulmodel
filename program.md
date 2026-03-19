@@ -1,5 +1,9 @@
 # mulmodel autoresearch
 
+**GOAL: Solve real Codeforces problems. pass_rate ≥ 50%.**
+
+**RULE: Keep it simple, clean, small.** If a change adds complexity without improving pass_rate, don't do it. Smaller model, simpler code, fewer tricks — always prefer the lightweight approach.
+
 This is an experiment to have the LLM do its own research on the mulmodel project.
 
 ## How to Run
