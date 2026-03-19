@@ -126,16 +126,40 @@ def postprocess_code(code: str) -> str:
 
 
 def extract_code(output: str) -> str:
-    match = re.search(r"```cpp\s*\n(.*?)```", output, re.DOTALL)
-    if match:
-        code = match.group(1).strip()
-        code = postprocess_code(code)
-        return code
-    match = re.search(r"```\s*\n(.*?)(?:```|$)", output, re.DOTALL)
-    if match:
-        code = match.group(1).strip()
-        code = postprocess_code(code)
-        return code
+    code_after_marker = None
+    if "[CODE]" in output:
+        parts = output.split("[CODE]", 1)
+        if len(parts) > 1:
+            code_after_marker = parts[1].strip()
+
+    if code_after_marker:
+        code = postprocess_code(code_after_marker)
+        if code and ("#" in code or "def " in code or "main" in code or "cout" in code):
+            return code
+
+    for pattern in [r"```cpp\s*\n(.*?)```", r"```\s*\n(.*?)```", r"```(.*?)```"]:
+        match = re.search(pattern, output, re.DOTALL)
+        if match:
+            code = postprocess_code(match.group(1).strip())
+            if code:
+                return code
+
+    lines = output.split("\n")
+    for i, line in enumerate(lines):
+        if "#include" in line or "def " in line or "main" in line or "cout" in line:
+            result = []
+            for l in lines[i:]:
+                if l.strip().startswith("[CODE]"):
+                    break
+                result.append(l)
+            if result:
+                return postprocess_code("\n".join(result).strip())
+
+    if code_after_marker:
+        return postprocess_code(code_after_marker)
+
+    if output.strip():
+        return postprocess_code(output.strip())
     return ""
 
 
