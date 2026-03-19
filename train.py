@@ -115,13 +115,19 @@ def train(args):
         MODEL_CONFIG["context_length"] = args.ctx_len
 
     tokenizer = None
-    code_first = args.tokenizer == "tiktoken"
-    if code_first:
+    if args.format == "auto":
+        code_first = args.tokenizer == "tiktoken"
+    else:
+        code_first = args.format == "code"
+    if args.tokenizer == "tiktoken":
         MODEL_CONFIG["vocab_size"] = 50257
         tokenizer = get_tokenizer("gpt2")
-        print(f"[Tokenizer] tiktoken gpt2, vocab=50257")
+        print(
+            f"[Tokenizer] tiktoken gpt2, vocab=50257, format={'CODE' if code_first else 'CoT'}"
+        )
     else:
         MODEL_CONFIG["vocab_size"] = 256
+        print(f"[Tokenizer] byte-level, format={'CODE' if code_first else 'CoT'}")
 
     model = BigModel(MODEL_CONFIG).to(device=device, dtype=dtype)
     print(f"[BigModel] {model.num_params():,} params  {dtype} on {device}")
@@ -316,6 +322,13 @@ def main():
         default="byte",
         choices=["byte", "tiktoken"],
         help="Tokenization method",
+    )
+    p.add_argument(
+        "--format",
+        type=str,
+        default="auto",
+        choices=["auto", "cot", "code"],
+        help="Training format: 'cot'=description+CoT+code, 'code'=description+CODE+extracted_code, 'auto'=cot for byte, code for tiktoken",
     )
     args = p.parse_args()
     train(args)
